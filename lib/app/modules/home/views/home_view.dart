@@ -239,82 +239,115 @@ class HomeView extends GetView<HomeController> {
       body: KeyboardListener(
         focusNode: FocusNode(),
         onKeyEvent: (event) {
-          if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.space) {
+          if (event is KeyDownEvent &&
+              event.logicalKey == LogicalKeyboardKey.space) {
             controller.stopAll();
           }
         },
         child: Row(
           children: [
             Expanded(
-              child: Obx(() {
-                // Read the ticker to trigger rebuilds for progress bars.
-                final _ = controller.remainingSeconds.value;
-                return Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final width = constraints.maxWidth;
-                      const spacing = 12.0;
-                      const targetTileW = 260.0; // desired width per tile
-                      const minTileH =
-                          180.0; // enforce min height to prevent overflow
-                      const maxCols = 8;
-        
-                      int cols = (width / (targetTileW + spacing)).floor().clamp(
-                        1,
-                        maxCols,
-                      );
-                      final itemW = (width - spacing * (cols - 1)) / cols;
-                      final childAspect = itemW / minTileH;
-        
-                      return Obx(
-                        () => GridView.builder(
-                          itemCount: controller.pads.length,
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: cols,
-                            mainAxisSpacing: spacing,
-                            crossAxisSpacing: spacing,
-                            childAspectRatio: childAspect,
-                          ),
-                          itemBuilder: (context, index) {
-                            final pad = controller.pads[index].obs;
-                            final color = colors[index % colors.length];
-                            final hasFile = pad.value.path != null;
-                            final fileName = hasFile
-                                ? pad.value.path!.split('/').last
-                                : 'Empty';
+              child: Column(
+                children: [
+                  Expanded(
+                    child: Obx(() {
+                      // Read the ticker to trigger rebuilds for progress bars.
+                      final _ = controller.remainingSeconds.value;
+                      // Also observe active handles for immediate play/pause updates
+                      final __ = controller.audioService.activeHandles.length;
+                      return Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final width = constraints.maxWidth;
+                            const spacing = 12.0;
+                            const targetTileW = 260.0; // desired width per tile
+                            const minTileH =
+                                180.0; // enforce min height to prevent overflow
+                            const maxCols = 8;
+
+                            int cols = (width / (targetTileW + spacing))
+                                .floor()
+                                .clamp(1, maxCols);
+                            final itemW = (width - spacing * (cols - 1)) / cols;
+                            final childAspect = itemW / minTileH;
+
                             return Obx(
-                              () => DropTarget(
-                                onDragDone: (detail) {
-                                  if (detail.files.isEmpty) return;
-                                  final f = detail.files.first;
-                                  if (!f.name.toLowerCase().endsWith('.mp3') &&
-                                      !f.name.toLowerCase().endsWith('.wav') &&
-                                      !f.name.toLowerCase().endsWith('.ogg') &&
-                                      !f.name.toLowerCase().endsWith('.flac') &&
-                                      !f.name.toLowerCase().endsWith('.aac') &&
-                                      !f.name.toLowerCase().endsWith('.m4a')) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          'Unsupported file type: ${f.name}',
-                                        ),
+                              () => GridView.builder(
+                                itemCount: controller.pads.length,
+                                gridDelegate:
+                                    SliverGridDelegateWithFixedCrossAxisCount(
+                                      crossAxisCount: cols,
+                                      mainAxisSpacing: spacing,
+                                      crossAxisSpacing: spacing,
+                                      childAspectRatio: childAspect,
+                                    ),
+                                itemBuilder: (context, index) {
+                                  final pad = controller.pads[index].obs;
+                                  final color = colors[index % colors.length];
+                                  final hasFile = pad.value.path != null;
+                                  final fileName = hasFile
+                                      ? pad.value.path!.split('/').last
+                                      : 'Empty';
+                                  return Obx(
+                                    () => DropTarget(
+                                      onDragDone: (detail) {
+                                        if (detail.files.isEmpty) return;
+                                        final f = detail.files.first;
+                                        if (!f.name.toLowerCase().endsWith(
+                                              '.mp3',
+                                            ) &&
+                                            !f.name.toLowerCase().endsWith(
+                                              '.wav',
+                                            ) &&
+                                            !f.name.toLowerCase().endsWith(
+                                              '.ogg',
+                                            ) &&
+                                            !f.name.toLowerCase().endsWith(
+                                              '.flac',
+                                            ) &&
+                                            !f.name.toLowerCase().endsWith(
+                                              '.aac',
+                                            ) &&
+                                            !f.name.toLowerCase().endsWith(
+                                              '.m4a',
+                                            )) {
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                'Unsupported file type: ${f.name}',
+                                              ),
+                                            ),
+                                          );
+                                          return;
+                                        }
+                                        controller.assignFilePathToPad(
+                                          index,
+                                          f.path,
+                                        );
+                                      },
+                                      child: _pad(
+                                        color,
+                                        hasFile,
+                                        index,
+                                        pad.value,
+                                        fileName,
                                       ),
-                                    );
-                                    return;
-                                  }
-                                  controller.assignFilePathToPad(index, f.path);
+                                    ),
+                                  );
                                 },
-                                child: _pad(color, hasFile, index, pad.value, fileName),
                               ),
                             );
                           },
                         ),
                       );
-                    },
+                    }),
                   ),
-                );
-              }),
+                  _buildTabs(context),
+                ],
+              ),
             ),
             // master audio meter <-- new
             const SizedBox(width: 8),
@@ -436,6 +469,161 @@ class HomeView extends GetView<HomeController> {
     );
   }
 
+  Widget _buildTabs(BuildContext context) {
+    return Container(
+      height: 50,
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Obx(() {
+              return ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: controller.groups.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (context, index) {
+                  final group = controller.groups[index];
+                  return Obx(() {
+                    final isSelected =
+                        controller.currentGroupIndex.value == index;
+                    return GestureDetector(
+                      onLongPress: () => _showTabOptions(context, index),
+                      child: ChoiceChip(
+                        label: Text(group.name),
+                        selected: isSelected,
+                        onSelected: (_) => controller.switchTab(index),
+                      ),
+                    );
+                  });
+                },
+              );
+            }),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            icon: const Icon(Icons.add),
+            onPressed: () => _showAddTabDialog(context),
+            tooltip: 'Add Tab',
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddTabDialog(BuildContext context) {
+    final textCtrl = TextEditingController();
+    Get.dialog(
+      AlertDialog(
+        title: const Text('Add Tab'),
+        content: TextField(
+          controller: textCtrl,
+          decoration: const InputDecoration(hintText: 'Tab Name'),
+          autofocus: true,
+          onSubmitted: (val) {
+            if (val.isNotEmpty) {
+              controller.addTab(val);
+              Get.back();
+            }
+          },
+        ),
+        actions: [
+          TextButton(onPressed: Get.back, child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              if (textCtrl.text.isNotEmpty) {
+                controller.addTab(textCtrl.text);
+                Get.back();
+              }
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTabOptions(BuildContext context, int index) {
+    Get.bottomSheet(
+      Container(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit),
+              title: const Text('Rename'),
+              onTap: () {
+                Get.back();
+                _showRenameTabDialog(context, index);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete, color: Colors.red),
+              title: const Text('Delete', style: TextStyle(color: Colors.red)),
+              onTap: () {
+                Get.back();
+                _showDeleteTabConfirmation(context, index);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRenameTabDialog(BuildContext context, int index) {
+    final textCtrl = TextEditingController(text: controller.groups[index].name);
+    Get.dialog(
+      AlertDialog(
+        title: const Text('Rename Tab'),
+        content: TextField(
+          controller: textCtrl,
+          decoration: const InputDecoration(hintText: 'Tab Name'),
+          autofocus: true,
+          onSubmitted: (val) {
+            if (val.isNotEmpty) {
+              controller.renameTab(index, val);
+              Get.back();
+            }
+          },
+        ),
+        actions: [
+          TextButton(onPressed: Get.back, child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              if (textCtrl.text.isNotEmpty) {
+                controller.renameTab(index, textCtrl.text);
+                Get.back();
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDeleteTabConfirmation(BuildContext context, int index) {
+    Get.dialog(
+      AlertDialog(
+        title: const Text('Delete Tab'),
+        content: const Text(
+          'Are you sure you want to delete this tab? All assigned pads in this tab will be lost.',
+        ),
+        actions: [
+          TextButton(onPressed: Get.back, child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              controller.deleteTab(index);
+              Get.back();
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Material _pad(
     Color color,
     bool hasFile,
@@ -447,11 +635,20 @@ class HomeView extends GetView<HomeController> {
         ? controller.audioService.getRemainingFractionForPath(pad.path!)
         : null;
     final isPlaying = hasFile && controller.audioService.isPlaying(pad.path!);
+    final isPaused = hasFile && controller.audioService.isPaused(pad.path!);
 
     // Blend base color towards white when playing for a clear visual change.
     final baseColor = color.withOpacity(hasFile ? 1 : 0.4);
     final playingColor = Color.fromARGB(255, 3, 165, 0); // Light Blue 300
     final bgColor = isPlaying ? playingColor.withOpacity(0.95) : baseColor;
+
+    // Timer text
+    String timerText = '';
+    if (hasFile && (isPlaying || isPaused)) {
+      final pos = controller.audioService.getPosition(pad.path!);
+      final len = controller.audioService.getLength(pad.path!);
+      timerText = '${_formatDuration(pos)} / ${_formatDuration(len)}';
+    }
 
     return Material(
       color: bgColor,
@@ -460,54 +657,174 @@ class HomeView extends GetView<HomeController> {
         borderRadius: BorderRadius.circular(16),
         onTap: hasFile ? () => controller.playPad(index) : null,
         onLongPress: () => controller.assignFileToPad(index),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                hasFile ? Icons.music_note : Icons.add,
-                color: Colors.white,
-                size: 36,
-              ),
-              const SizedBox(height: 8),
-              Text(
+        child: Stack(
+          children: [
+            // Top-Left: Pad Name
+            Positioned(
+              top: 12,
+              left: 12,
+              child: Text(
                 pad.name,
                 style: const TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,
+                  fontSize: 16,
                 ),
               ),
-              const SizedBox(height: 4),
-              Text(
-                fileName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white70),
+            ),
+            // Center: Icon (Play/Pause)
+            Center(
+              child: Icon(
+                !hasFile
+                    ? Icons.add
+                    : (isPlaying && !isPaused ? Icons.pause : Icons.play_arrow),
+                color: Colors.white.withOpacity(0.8),
+                size: 48,
               ),
-              const SizedBox(height: 4),
-              if (progress != null) ...[
-                const SizedBox(height: 6),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: progress, // 1.0 -> 0.0 while playing
-                    minHeight: 6,
-                    backgroundColor: Colors.white24,
-                    color: Colors.white,
+            ),
+            // Bottom-Left: File Name, Timer & Progress
+            Positioned(
+              bottom: 12,
+              left: 12,
+              right: 48, // Leave room for Stop button
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    fileName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                  if (timerText.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      timerText,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 6),
+                  if (progress != null)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        minHeight: 4,
+                        backgroundColor: Colors.white24,
+                        color: Colors.white,
+                      ),
+                    )
+                  else if (!hasFile)
+                    const Text(
+                      'Long-press to assign',
+                      style: TextStyle(color: Colors.white54, fontSize: 11),
+                    ),
+                ],
+              ),
+            ),
+            // Top-Right: Controls (Loop & Delete)
+            if (hasFile)
+              Positioned(
+                top: 4,
+                right: 4,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Loop Icon
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(20),
+                        onTap: () => controller.toggleLoop(index),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Icon(
+                            Icons.loop,
+                            size: 20,
+                            color: controller.pads[index].isLooping
+                                ? Colors.white
+                                : Colors.white.withOpacity(0.4),
+                          ),
+                        ),
+                      ),
+                    ),
+                    // Delete Icon
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(20),
+                        onTap: () {
+                          Get.dialog(
+                            AlertDialog(
+                              title: const Text('Clear Pad'),
+                              content: const Text(
+                                'Are you sure you want to remove the audio from this pad?',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Get.back(),
+                                  child: const Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () {
+                                    controller.clearPad(index);
+                                    Get.back();
+                                  },
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: Colors.red,
+                                  ),
+                                  child: const Text('Delete'),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Icon(
+                            Icons.delete_outline,
+                            size: 20,
+                            color: Colors.white.withOpacity(0.6),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            // Bottom-Right: Stop Button
+            if (hasFile && (isPlaying || isPaused))
+              Positioned(
+                bottom: 4,
+                right: 4,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: () => controller.stopPad(index),
+                    child: const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Icon(Icons.stop, size: 24, color: Colors.white),
+                    ),
                   ),
                 ),
-              ] else if (!hasFile) ...[
-                const Text(
-                  'Long-press to assign',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-              ],
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );
+  }
+
+  String _formatDuration(Duration d) {
+    final m = d.inMinutes;
+    final s = d.inSeconds % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
   }
 }
 

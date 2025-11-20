@@ -55,12 +55,19 @@ class AudioPlayerService extends GetxService {
     }
   }
 
-  Future<void> playSound(String path) async {
+  Future<void> playSound(String path, {bool loop = false}) async {
     await ensureInitialized();
     final source = await loadSound(path);
     if (source == null) return;
 
     final newHandle = await soloud.play(source);
+    if (loop) {
+      try {
+        soloud.setLooping(newHandle, true);
+      } catch (_) {
+        // ignore if looping not supported or handle invalid
+      }
+    }
     _activeSounds[newHandle] = source;
     _handlePath[newHandle] = path;
     activeHandles.add(newHandle);
@@ -103,14 +110,32 @@ class AudioPlayerService extends GetxService {
 
     Duration maxRemainingTime = Duration.zero;
     for (final handle in activeHandles.toList()) {
+      // Check if handle is still valid in the engine
+      if (!soloud.getIsValidVoiceHandle(handle)) {
+        _activeSounds.remove(handle);
+        _handlePath.remove(handle);
+        activeHandles.remove(handle);
+        continue;
+      }
+
       final source = _activeSounds[handle];
       if (source == null) continue;
 
       final length = soloud.getLength(source); // Duration
-      final position = soloud.getPosition(handle); // Duration
+      Duration position;
+      try {
+        position = soloud.getPosition(handle); // Duration
+      } catch (_) {
+        // If getPosition fails, assume finished
+        _activeSounds.remove(handle);
+        _handlePath.remove(handle);
+        activeHandles.remove(handle);
+        continue;
+      }
+
       final remaining = length - position;
 
-      // Optional: prune finished handles
+      // Prune finished handles
       if (remaining.isNegative || remaining == Duration.zero) {
         _activeSounds.remove(handle);
         _handlePath.remove(handle);
@@ -132,13 +157,31 @@ class AudioPlayerService extends GetxService {
     for (final entry in _handlePath.entries.toList()) {
       if (entry.value != path) continue;
       final handle = entry.key;
+
+      // Check validity
+      if (!soloud.getIsValidVoiceHandle(handle)) {
+        _activeSounds.remove(handle);
+        _handlePath.remove(handle);
+        activeHandles.remove(handle);
+        continue;
+      }
+
       final source = _activeSounds[handle];
       if (source == null) continue;
 
       final length = soloud.getLength(source);
       if (length.inMilliseconds <= 0) continue;
 
-      final position = soloud.getPosition(handle);
+      Duration position;
+      try {
+        position = soloud.getPosition(handle);
+      } catch (_) {
+        _activeSounds.remove(handle);
+        _handlePath.remove(handle);
+        activeHandles.remove(handle);
+        continue;
+      }
+
       final remaining = length - position;
 
       if (remaining.isNegative || remaining == Duration.zero) {
@@ -194,10 +237,90 @@ class AudioPlayerService extends GetxService {
     // intentionally no-op
   }
 
+  // --- added: pause/resume/position support ---
+
+  Future<void> pausePath(String path) async {
+    final handle = _getHandleForPath(path);
+    if (handle != null) {
+      soloud.setPause(handle, true);
+    }
+  }
+
+  Future<void> resumePath(String path) async {
+    final handle = _getHandleForPath(path);
+    if (handle != null) {
+      soloud.setPause(handle, false);
+    }
+  }
+
+  bool isPaused(String path) {
+    final handle = _getHandleForPath(path);
+    if (handle == null) return false;
+    return soloud.getPause(handle);
+  }
+
+  Duration getPosition(String path) {
+    final handle = _getHandleForPath(path);
+    if (handle == null) return Duration.zero;
+    try {
+      return soloud.getPosition(handle);
+    } catch (_) {
+      return Duration.zero;
+    }
+  }
+
+  Duration getLength(String path) {
+    final handle = _getHandleForPath(path);
+    if (handle == null) return Duration.zero;
+    final source = _activeSounds[handle];
+    if (source == null) return Duration.zero;
+    return soloud.getLength(source);
+  }
+
+  SoundHandle? _getHandleForPath(String path) {
+    for (final entry in _handlePath.entries) {
+      if (entry.value == path) {
+        // Check validity before returning
+        if (soloud.getIsValidVoiceHandle(entry.key)) {
+          return entry.key;
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<void> setLooping(String path, bool loop) async {
+    final handle = _getHandleForPath(path);
+    if (handle != null) {
+      try {
+        soloud.setLooping(handle, loop);
+      } catch (_) {
+        // ignore
+      }
+    }
+  }
+
+  // --- end added ---
+
   // --- added: real master level API used by the UI meter ---
   // Returns [left, right] RMS levels in 0..1. Falls back to mono if needed.
   List<double> getMasterLevels() {
     if (!isInitialized.value || activeHandles.isEmpty) {
+      masterRmsL = 0.0;
+      masterRmsR = 0.0;
+      return [0.0, 0.0];
+    }
+
+    // Check if any active handle is actually playing (not paused)
+    bool anyPlaying = false;
+    for (final handle in activeHandles) {
+      if (soloud.getIsValidVoiceHandle(handle) && !soloud.getPause(handle)) {
+        anyPlaying = true;
+        break;
+      }
+    }
+
+    if (!anyPlaying) {
       masterRmsL = 0.0;
       masterRmsR = 0.0;
       return [0.0, 0.0];

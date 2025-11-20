@@ -111,6 +111,49 @@ class StorageService extends GetxService {
     return loaded;
   }
 
+  Future<void> savePadGroups(List<PadGroup> groups) async {
+    if (kIsWeb) return;
+    final file = await _ensureFile();
+    final data = jsonEncode({'groups': groups.map((g) => g.toJson()).toList()});
+    await file.writeAsString(data);
+  }
+
+  Future<List<PadGroup>> loadPadGroups() async {
+    if (kIsWeb) return [];
+    final file = await _ensureFile();
+    if (!await file.exists()) return [];
+    final content = await file.readAsString();
+    if (content.isEmpty) return [];
+    final jsonMap = jsonDecode(content) as Map<String, dynamic>;
+
+    // Check if we have groups
+    if (jsonMap.containsKey('groups')) {
+      final list = (jsonMap['groups'] as List? ?? []);
+      return list
+          .map((e) => PadGroup.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+    }
+
+    // Migration: If no groups but 'pads' exist, wrap them in a Default group
+    if (jsonMap.containsKey('pads')) {
+      final list = (jsonMap['pads'] as List? ?? []);
+      final pads = list
+          .map((e) => Pad.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+
+      // Ensure 20 pads
+      if (pads.length < 20) {
+        for (int i = pads.length; i < 20; i++) {
+          pads.add(Pad(name: 'Pad ${i + 1}'));
+        }
+      }
+
+      return [PadGroup(id: 'default', name: 'Default', pads: pads)];
+    }
+
+    return [];
+  }
+
   Future<void> clear() async {
     if (kIsWeb) return;
     final file = await _ensureFile();
