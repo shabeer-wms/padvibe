@@ -114,11 +114,9 @@ class HomeController extends GetxController {
 
   void switchTab(int index) {
     if (index < 0 || index >= groups.length) return;
-    // Stop all sounds when switching? Or let them play?
-    // User request: "each tabs will have its own pads".
-    // Usually switching context implies stopping previous context, but for live performance,
-    // maybe they want to trigger a sound in Tab A and switch to Tab B.
-    // I will NOT stop sounds automatically to allow mixing, unless requested.
+
+    // Stop all sounds when switching tabs
+    stopAll();
 
     currentGroupIndex.value = index;
     pads.assignAll(groups[index].pads);
@@ -215,6 +213,12 @@ class HomeController extends GetxController {
       audioService.setLooping(pad.path!, newLooping);
     }
 
+    _updateCurrentGroup();
+    _saveGroups();
+  }
+
+  void assignKeyboardShortcut(int index, String? keyLabel) {
+    pads[index] = pads[index].copyWith(keyboardShortcut: keyLabel);
     _updateCurrentGroup();
     _saveGroups();
   }

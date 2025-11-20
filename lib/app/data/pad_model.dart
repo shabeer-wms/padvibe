@@ -3,20 +3,29 @@ class Pad {
   final int? color;
   final String? path;
   final bool isLooping;
+  final String? keyboardShortcut;
 
   const Pad({
     required this.name,
     this.path,
     this.color = 0xFFB0BEC5, // grey
     this.isLooping = false,
+    this.keyboardShortcut,
   });
 
-  Pad copyWith({String? name, String? path, int? color, bool? isLooping}) {
+  Pad copyWith({
+    String? name,
+    String? path,
+    int? color,
+    bool? isLooping,
+    String? keyboardShortcut,
+  }) {
     return Pad(
       name: name ?? this.name,
       path: path ?? this.path,
       color: color ?? this.color,
       isLooping: isLooping ?? this.isLooping,
+      keyboardShortcut: keyboardShortcut ?? this.keyboardShortcut,
     );
   }
 
@@ -25,6 +34,7 @@ class Pad {
     'path': path,
     'color': color,
     'isLooping': isLooping,
+    'keyboardShortcut': keyboardShortcut,
   };
 
   factory Pad.fromJson(Map<String, dynamic> json) {
@@ -33,6 +43,7 @@ class Pad {
       path: json['path'] as String?,
       color: (json['color'] as int?) ?? 0xFFB0BEC5,
       isLooping: (json['isLooping'] as bool?) ?? false,
+      keyboardShortcut: json['keyboardShortcut'] as String?,
     );
   }
 }

@@ -237,11 +237,37 @@ class HomeView extends GetView<HomeController> {
     return Scaffold(
       appBar: _appBar(context),
       body: KeyboardListener(
-        focusNode: FocusNode(),
+        autofocus: true,
+        focusNode: FocusNode()..requestFocus(),
         onKeyEvent: (event) {
-          if (event is KeyDownEvent &&
-              event.logicalKey == LogicalKeyboardKey.space) {
-            controller.stopAll();
+          if (event is KeyDownEvent) {
+            // Space key stops all
+            if (event.logicalKey == LogicalKeyboardKey.space) {
+              controller.stopAll();
+              return;
+            }
+
+            // Get the key label
+            final keyLabel = event.logicalKey.keyLabel.toUpperCase();
+            if (keyLabel.isEmpty) return;
+
+            // Find pad with this keyboard shortcut
+            final padIndex = controller.pads.indexWhere(
+              (pad) => pad.keyboardShortcut == keyLabel,
+            );
+
+            if (padIndex != -1) {
+              // Check if Shift is pressed using HardwareKeyboard
+              final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+
+              if (isShiftPressed) {
+                // Shift + key = Stop
+                controller.stopPad(padIndex);
+              } else {
+                // Just key = Play/Pause
+                controller.playPad(padIndex);
+              }
+            }
           }
         },
         child: Row(
@@ -624,6 +650,58 @@ class HomeView extends GetView<HomeController> {
     );
   }
 
+  void _showKeyboardShortcutDialog(int padIndex) {
+    Get.dialog(
+      KeyboardListener(
+        autofocus: true,
+        focusNode: FocusNode()..requestFocus(),
+        onKeyEvent: (event) {
+          if (event is KeyDownEvent) {
+            final key = event.logicalKey;
+            String? keyLabel;
+
+            // Get a human-readable key label
+            if (key.keyLabel.isNotEmpty) {
+              keyLabel = key.keyLabel.toUpperCase();
+            }
+
+            if (keyLabel != null && keyLabel.isNotEmpty) {
+              controller.assignKeyboardShortcut(padIndex, keyLabel);
+              Get.back();
+            }
+          }
+        },
+        child: AlertDialog(
+          title: const Text('Assign Keyboard Shortcut'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Press any key to assign it to this pad.'),
+              const SizedBox(height: 16),
+              if (controller.pads[padIndex].keyboardShortcut != null) ...[
+                Text(
+                  'Current: ${controller.pads[padIndex].keyboardShortcut}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () {
+                    controller.assignKeyboardShortcut(padIndex, null);
+                    Get.back();
+                  },
+                  child: const Text('Remove Shortcut'),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: Get.back, child: const Text('Cancel')),
+          ],
+        ),
+      ),
+    );
+  }
+
   Material _pad(
     Color color,
     bool hasFile,
@@ -659,17 +737,44 @@ class HomeView extends GetView<HomeController> {
         onLongPress: () => controller.assignFileToPad(index),
         child: Stack(
           children: [
-            // Top-Left: Pad Name
+            // Top-Left: Pad Name and Keyboard Shortcut
             Positioned(
               top: 12,
               left: 12,
-              child: Text(
-                pad.name,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    pad.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                  if (controller.pads[index].keyboardShortcut != null) ...[
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        controller.pads[index].keyboardShortcut!,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
             // Center: Icon (Play/Pause)
@@ -736,6 +841,25 @@ class HomeView extends GetView<HomeController> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // Keyboard Shortcut Icon
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(20),
+                        onTap: () => _showKeyboardShortcutDialog(index),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Icon(
+                            Icons.keyboard,
+                            size: 20,
+                            color:
+                                controller.pads[index].keyboardShortcut != null
+                                ? Colors.white
+                                : Colors.white.withOpacity(0.4),
+                          ),
+                        ),
+                      ),
+                    ),
                     // Loop Icon
                     Material(
                       color: Colors.transparent,
