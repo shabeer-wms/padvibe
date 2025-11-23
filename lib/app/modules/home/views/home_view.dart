@@ -709,9 +709,16 @@ class HomeView extends GetView<HomeController> {
     Pad pad,
     String fileName,
   ) {
-    final progress = hasFile
-        ? controller.audioService.getRemainingFractionForPath(pad.path!)
-        : null;
+    double? progress;
+    if (hasFile) {
+      final len = controller.audioService.getLength(pad.path!);
+      if (len.inMilliseconds > 0) {
+        final pos = controller.audioService.getPosition(pad.path!);
+        progress = pos.inMilliseconds / len.inMilliseconds;
+      } else {
+        progress = 0.0;
+      }
+    }
     final isPlaying = hasFile && controller.audioService.isPlaying(pad.path!);
     final isPaused = hasFile && controller.audioService.isPaused(pad.path!);
 
@@ -787,11 +794,11 @@ class HomeView extends GetView<HomeController> {
                 size: 48,
               ),
             ),
-            // Bottom-Left: File Name, Timer & Progress
+            // Bottom: Controls & Info
             Positioned(
-              bottom: 12,
+              bottom: 8,
               left: 12,
-              right: 48, // Leave room for Stop button
+              right: 12,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
@@ -814,21 +821,88 @@ class HomeView extends GetView<HomeController> {
                       ),
                     ),
                   ],
-                  const SizedBox(height: 6),
-                  if (progress != null)
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: progress,
-                        minHeight: 4,
-                        backgroundColor: Colors.white24,
-                        color: Colors.white,
+                  const SizedBox(height: 4),
+                  if (hasFile) ...[
+                    SizedBox(
+                      height: 20,
+                      child: SliderTheme(
+                        data: SliderTheme.of(Get.context!).copyWith(
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 6,
+                          ),
+                          overlayShape: const RoundSliderOverlayShape(
+                            overlayRadius: 10,
+                          ),
+                          trackHeight: 2,
+                          activeTrackColor: Colors.white,
+                          inactiveTrackColor: Colors.white24,
+                          thumbColor: Colors.white,
+                          overlayColor: Colors.white.withOpacity(0.2),
+                        ),
+                        child: Slider(
+                          value: progress ?? 0.0,
+                          onChanged: (v) => controller.seekPad(index, v),
+                        ),
                       ),
-                    )
-                  else if (!hasFile)
-                    const Text(
-                      'Long-press to assign',
-                      style: TextStyle(color: Colors.white54, fontSize: 11),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        IconButton(
+                          icon: const Icon(
+                            Icons.replay,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                          onPressed: () => controller.restartPad(index),
+                          tooltip: 'Restart',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.replay_5,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                          onPressed: () => controller.skipBackward(index),
+                          tooltip: '-5s',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.forward_5,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                          onPressed: () => controller.skipForward(index),
+                          tooltip: '+5s',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                        if (isPlaying || isPaused)
+                          IconButton(
+                            icon: const Icon(
+                              Icons.stop,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                            onPressed: () => controller.stopPad(index),
+                            tooltip: 'Stop',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                      ],
+                    ),
+                  ] else
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text(
+                        'Long-press to assign',
+                        style: TextStyle(color: Colors.white54, fontSize: 11),
+                      ),
                     ),
                 ],
               ),
@@ -920,23 +994,6 @@ class HomeView extends GetView<HomeController> {
                       ),
                     ),
                   ],
-                ),
-              ),
-            // Bottom-Right: Stop Button
-            if (hasFile && (isPlaying || isPaused))
-              Positioned(
-                bottom: 4,
-                right: 4,
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(20),
-                    onTap: () => controller.stopPad(index),
-                    child: const Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Icon(Icons.stop, size: 24, color: Colors.white),
-                    ),
-                  ),
                 ),
               ),
           ],

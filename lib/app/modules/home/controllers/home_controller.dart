@@ -217,6 +217,49 @@ class HomeController extends GetxController {
     _saveGroups();
   }
 
+  Future<void> seekPad(int index, double value) async {
+    final pad = pads[index];
+    if (pad.path == null) return;
+    final path = pad.path!;
+    final length = audioService.getLength(path);
+    final position = length * value;
+    await audioService.seek(path, position);
+  }
+
+  Future<void> restartPad(int index) async {
+    final pad = pads[index];
+    if (pad.path == null) return;
+    await audioService.seek(pad.path!, Duration.zero);
+  }
+
+  Future<void> skipForward(int index) async {
+    final pad = pads[index];
+    if (pad.path == null) return;
+    final path = pad.path!;
+    final current = audioService.getPosition(path);
+    final length = audioService.getLength(path);
+    final newPos = current + const Duration(seconds: 5);
+    if (newPos < length) {
+      await audioService.seek(path, newPos);
+    } else {
+      // optional: stop or seek to end
+      await audioService.seek(path, length);
+    }
+  }
+
+  Future<void> skipBackward(int index) async {
+    final pad = pads[index];
+    if (pad.path == null) return;
+    final path = pad.path!;
+    final current = audioService.getPosition(path);
+    final newPos = current - const Duration(seconds: 5);
+    if (newPos > Duration.zero) {
+      await audioService.seek(path, newPos);
+    } else {
+      await audioService.seek(path, Duration.zero);
+    }
+  }
+
   void assignKeyboardShortcut(int index, String? keyLabel) {
     pads[index] = pads[index].copyWith(keyboardShortcut: keyLabel);
     _updateCurrentGroup();

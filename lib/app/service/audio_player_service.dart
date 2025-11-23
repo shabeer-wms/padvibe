@@ -300,6 +300,17 @@ class AudioPlayerService extends GetxService {
     }
   }
 
+  Future<void> seek(String path, Duration position) async {
+    final handle = _getHandleForPath(path);
+    if (handle != null) {
+      try {
+        soloud.seek(handle, position);
+      } catch (_) {
+        // ignore
+      }
+    }
+  }
+
   // --- end added ---
 
   // --- added: real master level API used by the UI meter ---
