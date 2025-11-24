@@ -236,20 +236,20 @@ class HomeView extends GetView<HomeController> {
     ];
     return Scaffold(
       appBar: _appBar(context),
-      body: KeyboardListener(
+      body: Focus(
         autofocus: true,
-        focusNode: FocusNode()..requestFocus(),
-        onKeyEvent: (event) {
+        focusNode: controller.focusNode,
+        onKeyEvent: (node, event) {
           if (event is KeyDownEvent) {
             // Space key stops all
             if (event.logicalKey == LogicalKeyboardKey.space) {
               controller.stopAll();
-              return;
+              return KeyEventResult.handled;
             }
 
             // Get the key label
             final keyLabel = event.logicalKey.keyLabel.toUpperCase();
-            if (keyLabel.isEmpty) return;
+            if (keyLabel.isEmpty) return KeyEventResult.ignored;
 
             // Find pad with this keyboard shortcut
             final padIndex = controller.pads.indexWhere(
@@ -267,8 +267,10 @@ class HomeView extends GetView<HomeController> {
                 // Just key = Play/Pause
                 controller.playPad(padIndex);
               }
+              return KeyEventResult.handled;
             }
           }
+          return KeyEventResult.ignored;
         },
         child: Row(
           children: [

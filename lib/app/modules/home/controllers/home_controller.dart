@@ -28,6 +28,8 @@ class HomeController extends GetxController {
   // Track the created timer window id to push updates
   int? _timerWindowId;
 
+  final FocusNode focusNode = FocusNode();
+
   @override
   void onInit() {
     super.onInit();
@@ -365,6 +367,7 @@ class HomeController extends GetxController {
   @override
   void onClose() {
     _ticker?.cancel();
+    focusNode.dispose();
     super.onClose();
   }
 
