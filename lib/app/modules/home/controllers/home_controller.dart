@@ -30,6 +30,31 @@ class HomeController extends GetxController {
 
   final FocusNode focusNode = FocusNode();
 
+  // --- Inline Renaming ---
+  final editingPadIndex = (-1).obs;
+  final TextEditingController renamePadInputController =
+      TextEditingController();
+
+  void startRenamingPad(int index) {
+    if (index < 0 || index >= pads.length) return;
+    editingPadIndex.value = index;
+    renamePadInputController.text = pads[index].name;
+  }
+
+  void savePadName(int index, String name) {
+    if (index < 0 || index >= pads.length) return;
+    pads[index] = pads[index].copyWith(name: name);
+    _updateCurrentGroup();
+    _saveGroups();
+    editingPadIndex.value = -1;
+    renamePadInputController.clear();
+  }
+
+  void cancelRenamingPad() {
+    editingPadIndex.value = -1;
+    renamePadInputController.clear();
+  }
+
   @override
   void onInit() {
     super.onInit();

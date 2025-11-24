@@ -118,6 +118,9 @@ class AudioPlayerService extends GetxService {
         continue;
       }
 
+      // Ignore paused sounds for the global timer
+      if (soloud.getPause(handle)) continue;
+
       final source = _activeSounds[handle];
       if (source == null) continue;
 

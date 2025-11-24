@@ -754,14 +754,55 @@ class HomeView extends GetView<HomeController> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    pad.name,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
+                  Obx(() {
+                    if (controller.editingPadIndex.value == index) {
+                      return SizedBox(
+                        width: 120,
+                        height: 30,
+                        child: TextField(
+                          controller: controller.renamePadInputController,
+                          autofocus: true,
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                          decoration: InputDecoration(
+                            filled: true,
+                            fillColor: Colors.white,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 0,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(4),
+                              borderSide: BorderSide.none,
+                            ),
+                          ),
+                          onSubmitted: (val) {
+                            if (val.trim().isNotEmpty) {
+                              controller.savePadName(index, val.trim());
+                            } else {
+                              controller.cancelRenamingPad();
+                            }
+                          },
+                          onTapOutside: (_) => controller.cancelRenamingPad(),
+                        ),
+                      );
+                    } else {
+                      return GestureDetector(
+                        onTap: () => controller.startRenamingPad(index),
+                        child: Text(
+                          pad.name,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                      );
+                    }
+                  }),
                   if (controller.pads[index].keyboardShortcut != null) ...[
                     const SizedBox(height: 4),
                     Container(
