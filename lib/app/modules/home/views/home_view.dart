@@ -34,18 +34,16 @@ class HomeView extends GetView<HomeController> {
 
   // Changed: make formatter static so it can be used by the API
   static String _formatRemaining(double secs) {
-    if (secs.isNaN || secs.isInfinite) return '--:--';
+    if (secs.isNaN || secs.isInfinite) return '00:00:000';
     if (secs < 0) secs = 0;
     final totalMs = (secs * 1000).round();
-    final hours = totalMs ~/ 3600000;
-    final mins = (totalMs % 3600000) ~/ 60000;
+    final mins = totalMs ~/ 60000;
     final secInt = (totalMs % 60000) ~/ 1000;
-    final tenths = ((totalMs % 1000) ~/ 100);
+    final millis = (totalMs % 1000); // 3 digits (000-999)
+
     String two(int n) => n.toString().padLeft(2, '0');
-    if (hours > 0) {
-      return '$hours:${two(mins)}:${two(secInt)}.$tenths';
-    }
-    return '${two(mins)}:${two(secInt)}.$tenths';
+    String three(int n) => n.toString().padLeft(3, '0');
+    return '${two(mins)}:${two(secInt)}:${three(millis)}';
   }
 
   // Added: urgency color for timer

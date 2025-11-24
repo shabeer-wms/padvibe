@@ -90,7 +90,7 @@ class HomeController extends GetxController {
       await _sanitizeCurrentPads();
     }();
 
-    _ticker = Timer.periodic(const Duration(milliseconds: 200), (_) async {
+    _ticker = Timer.periodic(const Duration(milliseconds: 16), (_) async {
       final v = audioService.getRemainingTime();
       remainingSeconds.value = v;
 
