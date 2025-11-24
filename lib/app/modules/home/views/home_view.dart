@@ -515,7 +515,16 @@ class HomeView extends GetView<HomeController> {
                     final isSelected =
                         controller.currentGroupIndex.value == index;
                     return GestureDetector(
-                      onLongPress: () => _showTabOptions(context, index),
+                      onSecondaryTapUp: (details) => _showTabOptions(
+                        context,
+                        index,
+                        details.globalPosition,
+                      ),
+                      onDoubleTapDown: (details) => _showRenameTabPopover(
+                        context,
+                        index,
+                        details.globalPosition,
+                      ),
                       child: ChoiceChip(
                         label: Text(group.name),
                         selected: isSelected,
@@ -570,63 +579,87 @@ class HomeView extends GetView<HomeController> {
     );
   }
 
-  void _showTabOptions(BuildContext context, int index) {
-    Get.bottomSheet(
-      Container(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.edit),
-              title: const Text('Rename'),
-              onTap: () {
-                Get.back();
-                _showRenameTabDialog(context, index);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete, color: Colors.red),
-              title: const Text('Delete', style: TextStyle(color: Colors.red)),
-              onTap: () {
-                Get.back();
-                _showDeleteTabConfirmation(context, index);
-              },
-            ),
-          ],
-        ),
+  void _showTabOptions(BuildContext context, int index, Offset position) {
+    showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        position.dx + 1,
+        position.dy + 1,
       ),
+      items: [
+        PopupMenuItem(
+          value: 'rename',
+          child: const ListTile(
+            leading: Icon(Icons.edit),
+            title: Text('Rename'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+          onTap: () {
+            // Slight delay to allow menu to close before showing dialog/popover
+            Future.delayed(
+              const Duration(milliseconds: 100),
+              () => _showRenameTabPopover(context, index, position),
+            );
+          },
+        ),
+        PopupMenuItem(
+          value: 'delete',
+          child: const ListTile(
+            leading: Icon(Icons.delete, color: Colors.red),
+            title: Text('Delete', style: TextStyle(color: Colors.red)),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+          onTap: () {
+            Future.delayed(
+              const Duration(milliseconds: 100),
+              () => _showDeleteTabConfirmation(context, index),
+            );
+          },
+        ),
+      ],
     );
   }
 
-  void _showRenameTabDialog(BuildContext context, int index) {
+  void _showRenameTabPopover(BuildContext context, int index, Offset position) {
     final textCtrl = TextEditingController(text: controller.groups[index].name);
-    Get.dialog(
-      AlertDialog(
-        title: const Text('Rename Tab'),
-        content: TextField(
-          controller: textCtrl,
-          decoration: const InputDecoration(hintText: 'Tab Name'),
-          autofocus: true,
-          onSubmitted: (val) {
-            if (val.isNotEmpty) {
-              controller.renameTab(index, val);
-              Get.back();
-            }
-          },
-        ),
-        actions: [
-          TextButton(onPressed: Get.back, child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              if (textCtrl.text.isNotEmpty) {
-                controller.renameTab(index, textCtrl.text);
-                Get.back();
-              }
-            },
-            child: const Text('Save'),
-          ),
-        ],
+    showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        position.dx + 1,
+        position.dy + 1,
       ),
+      items: [
+        PopupMenuItem(
+          enabled: false, // Don't close on tap, handle manually
+          child: SizedBox(
+            width: 200,
+            child: TextField(
+              controller: textCtrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'Tab Name',
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 8,
+                ),
+              ),
+              onSubmitted: (val) {
+                if (val.isNotEmpty) {
+                  controller.renameTab(index, val);
+                  Navigator.of(context).pop(); // Close menu
+                }
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 
