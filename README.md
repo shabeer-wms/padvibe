@@ -108,8 +108,10 @@ Notes:
 ## Screenshots
 Place screenshots under `assets/screenshots/` and reference here.
 ```
-![PadVibe on macOS](assets/screenshots/macos.png)
-![PadVibe on Linux](assets/screenshots/linux.png)
+![PadVibe on macOS](assets/screenshots/padvibe_macos.png)
+![PadVibe UI 2](assets/screenshots/padvibe_macos_2.png)
+![PadVibe UI 3](assets/screenshots/padvibe_macos_3.png)
+![PadVibe UI 4](assets/screenshots/padvibe_macos_4.png)
 ```
 
 ## Release & Versioning
@@ -143,6 +145,8 @@ TBD. Add a LICENSE file to clarify usage and distribution.
 - Desktop and Web targets: Windows, Linux (GTK), macOS, Web
 - Drag & drop files (desktop_drop)
 - Native file picking (file_picker)
+- MIDI Support (flutter_midi_command)
+- Audio Output Selection
 <!-- - Multi‑window utilities (desktop_multi_window) -->
 - Audio playback via SoLoud (flutter_soloud)
 - Audio session integration (audio_session)
