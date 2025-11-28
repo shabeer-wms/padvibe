@@ -17,6 +17,8 @@ class HomeController extends GetxController {
   final storage = Get.put(StorageService(), permanent: true);
 
   final count = 0.obs;
+  // Signal to force UI updates (e.g. when seeking while paused)
+  final forceUpdate = 0.obs;
 
   // Tabs / Groups
   final groups = <PadGroup>[].obs;
@@ -280,12 +282,14 @@ class HomeController extends GetxController {
     final length = audioService.getLength(path);
     final position = length * value;
     await audioService.seek(path, position);
+    forceUpdate.value++;
   }
 
   Future<void> restartPad(int index) async {
     final pad = pads[index];
     if (pad.path == null) return;
     await audioService.seek(pad.path!, Duration.zero);
+    forceUpdate.value++;
   }
 
   Future<void> skipForward(int index) async {
@@ -301,6 +305,7 @@ class HomeController extends GetxController {
       // optional: stop or seek to end
       await audioService.seek(path, length);
     }
+    forceUpdate.value++;
   }
 
   Future<void> skipBackward(int index) async {
@@ -314,6 +319,7 @@ class HomeController extends GetxController {
     } else {
       await audioService.seek(path, Duration.zero);
     }
+    forceUpdate.value++;
   }
 
   void assignKeyboardShortcut(int index, String? keyLabel) {

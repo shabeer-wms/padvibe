@@ -282,6 +282,8 @@ class HomeView extends GetView<HomeController> {
                       final _ = controller.remainingSeconds.value;
                       // Also observe active handles for immediate play/pause updates
                       final __ = controller.audioService.activeHandles.length;
+                      // Also observe manual force updates (e.g. seeking while paused)
+                      final ___ = controller.forceUpdate.value;
                       return Padding(
                         padding: const EdgeInsets.all(12),
                         child: LayoutBuilder(
