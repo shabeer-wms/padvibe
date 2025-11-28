@@ -8,6 +8,7 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:get/get.dart';
 
 class HomeController extends GetxController {
@@ -116,6 +117,22 @@ class HomeController extends GetxController {
         }
       }
     });
+
+    // Restore saved audio output device
+    () async {
+      final savedDeviceId = await storage.getSavedAudioDeviceId();
+      if (savedDeviceId != null) {
+        // Wait for devices to be enumerated
+        await Future.delayed(const Duration(milliseconds: 500));
+        final device = audioService.outputDevices.firstWhere(
+          (d) => d.id == savedDeviceId,
+          orElse: () => audioService.outputDevices.isNotEmpty
+              ? audioService.outputDevices.first
+              : throw StateError('No devices'),
+        );
+        await audioService.selectOutputDevice(device);
+      }
+    }();
   }
 
   Future<void> _sanitizeCurrentPads() async {
@@ -415,6 +432,11 @@ class HomeController extends GetxController {
   }
 
   void increment() => count.value++;
+
+  Future<void> selectAudioDevice(PlaybackDevice device) async {
+    await audioService.selectOutputDevice(device);
+    await storage.saveSelectedAudioDevice(device.id);
+  }
 
   void assignFilePathToPad(int index, String data) async {
     // drag-and-drop path assignment; copy to app library

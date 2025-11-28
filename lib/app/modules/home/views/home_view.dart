@@ -468,6 +468,11 @@ class HomeView extends GetView<HomeController> {
           onPressed: () => _showMidiDevicesDialog(context),
         ),
         IconButton(
+          tooltip: 'Audio Output',
+          icon: const Icon(Icons.volume_up),
+          onPressed: () => _showAudioOutputDialog(context),
+        ),
+        IconButton(
           tooltip: 'Stop all',
           icon: const Icon(Icons.stop_circle_outlined),
           onPressed: controller.stopAll,
@@ -788,6 +793,56 @@ class HomeView extends GetView<HomeController> {
         actions: [
           TextButton(
             onPressed: controller.midiService.refreshDevices,
+            child: const Text('Refresh'),
+          ),
+          TextButton(onPressed: Get.back, child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  void _showAudioOutputDialog(BuildContext context) {
+    Get.dialog(
+      AlertDialog(
+        title: const Text('Audio Output Device'),
+        content: SizedBox(
+          width: 350,
+          child: Obx(() {
+            final devices = controller.audioService.outputDevices;
+            final selected = controller.audioService.selectedDevice.value;
+
+            if (devices.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Text('No audio output devices found.'),
+              );
+            }
+
+            return ListView.builder(
+              shrinkWrap: true,
+              itemCount: devices.length,
+              itemBuilder: (ctx, i) {
+                final device = devices[i];
+                final isSelected = selected?.id == device.id;
+                final isDefault = device.isDefault;
+
+                return ListTile(
+                  title: Text(device.name),
+                  subtitle: isDefault ? const Text('System Default') : null,
+                  trailing: isSelected
+                      ? const Icon(Icons.check_circle, color: Colors.green)
+                      : null,
+                  onTap: () async {
+                    await controller.selectAudioDevice(device);
+                  },
+                );
+              },
+            );
+          }),
+        ),
+        actions: [
+          TextButton(
+            onPressed: controller.audioService.refreshOutputDevices,
             child: const Text('Refresh'),
           ),
           TextButton(onPressed: Get.back, child: const Text('Close')),

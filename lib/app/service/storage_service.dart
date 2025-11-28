@@ -168,4 +168,42 @@ class StorageService extends GetxService {
     _file = File('${dir.path}/pads.json');
     return _file!;
   }
+
+  // --- added: audio device preference persistence ---
+
+  /// Save the selected audio device ID
+  Future<void> saveSelectedAudioDevice(int deviceId) async {
+    if (kIsWeb) return;
+    final file = await _ensureFile();
+    Map<String, dynamic> data = {};
+
+    // Load existing data
+    if (await file.exists()) {
+      final content = await file.readAsString();
+      if (content.isNotEmpty) {
+        data = jsonDecode(content) as Map<String, dynamic>;
+      }
+    }
+
+    // Update audio device preference
+    data['selectedAudioDeviceId'] = deviceId;
+
+    // Save back
+    await file.writeAsString(jsonEncode(data));
+  }
+
+  /// Get the saved audio device ID
+  Future<int?> getSavedAudioDeviceId() async {
+    if (kIsWeb) return null;
+    final file = await _ensureFile();
+    if (!await file.exists()) return null;
+
+    final content = await file.readAsString();
+    if (content.isEmpty) return null;
+
+    final jsonMap = jsonDecode(content) as Map<String, dynamic>;
+    return jsonMap['selectedAudioDeviceId'] as int?;
+  }
+
+  // --- end added ---
 }

@@ -16,6 +16,11 @@ class AudioPlayerService extends GetxService {
   // Track which path each active handle belongs to (no caching of sources).
   final Map<SoundHandle, String> _handlePath = {};
 
+  // --- added: audio output device management ---
+  final RxList<PlaybackDevice> outputDevices = <PlaybackDevice>[].obs;
+  final Rxn<PlaybackDevice> selectedDevice = Rxn<PlaybackDevice>();
+  // --- end added ---
+
   // --- added: expose master RMS levels for meters ---
   double masterRmsL = 0.0;
   double masterRmsR = 0.0;
@@ -31,6 +36,7 @@ class AudioPlayerService extends GetxService {
     await soloud.init(); // await to ensure ready
     isInitialized.value = true;
     soloud.setVisualizationEnabled(true);
+    await refreshOutputDevices(); // enumerate available audio devices
   }
 
   @override
@@ -390,6 +396,40 @@ class AudioPlayerService extends GetxService {
   double getMasterLevel() {
     final lr = getMasterLevels();
     return ((lr[0] + lr[1]) * 0.5).clamp(0.0, 1.0);
+  }
+
+  // --- added: audio output device management methods ---
+
+  /// Enumerate available audio output devices
+  Future<void> refreshOutputDevices() async {
+    if (!isInitialized.value) return;
+    try {
+      final devices = await soloud.listPlaybackDevices();
+      outputDevices.assignAll(devices);
+
+      // Set selectedDevice to the current default if not already set
+      if (selectedDevice.value == null && devices.isNotEmpty) {
+        final defaultDevice = devices.firstWhere(
+          (d) => d.isDefault,
+          orElse: () => devices.first,
+        );
+        selectedDevice.value = defaultDevice;
+      }
+    } catch (e) {
+      // If enumeration fails, clear the list
+      outputDevices.clear();
+    }
+  }
+
+  /// Select and switch to a specific audio output device
+  Future<void> selectOutputDevice(PlaybackDevice device) async {
+    if (!isInitialized.value) return;
+    try {
+      soloud.changeDevice(newDevice: device);
+      selectedDevice.value = device;
+    } catch (e) {
+      // Device change failed, keep current selection
+    }
   }
 
   // --- end added ---
