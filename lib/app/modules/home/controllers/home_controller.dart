@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:PadVibe/app/data/pad_model.dart';
 import 'package:PadVibe/app/service/audio_player_service.dart';
+import 'package:PadVibe/app/service/midi_service.dart';
 import 'package:PadVibe/app/service/storage_service.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:file_picker/file_picker.dart';
@@ -11,6 +12,7 @@ import 'package:get/get.dart';
 
 class HomeController extends GetxController {
   final audioService = Get.find<AudioPlayerService>();
+  final midiService = Get.put(MidiService());
   final storage = Get.put(StorageService(), permanent: true);
 
   final count = 0.obs;
@@ -101,6 +103,16 @@ class HomeController extends GetxController {
           await DesktopMultiWindow.invokeMethod(id, 'update_secs', v);
         } catch (_) {
           // Ignore if window was closed or not ready
+        }
+      }
+    });
+
+    // Listen to MIDI events
+    midiService.noteStream.listen((event) {
+      if (event.type == MidiEventType.noteOn) {
+        final index = pads.indexWhere((p) => p.midiNote == event.note);
+        if (index != -1) {
+          playPad(index);
         }
       }
     });
@@ -289,6 +301,12 @@ class HomeController extends GetxController {
 
   void assignKeyboardShortcut(int index, String? keyLabel) {
     pads[index] = pads[index].copyWith(keyboardShortcut: keyLabel);
+    _updateCurrentGroup();
+    _saveGroups();
+  }
+
+  void assignMidiNote(int index, int? note) {
+    pads[index] = pads[index].copyWith(midiNote: note);
     _updateCurrentGroup();
     _saveGroups();
   }

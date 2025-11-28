@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
+import 'package:PadVibe/app/service/midi_service.dart'; // added
 import '../controllers/home_controller.dart';
 
 class HomeView extends GetView<HomeController> {
@@ -354,12 +355,20 @@ class HomeView extends GetView<HomeController> {
                                           f.path,
                                         );
                                       },
-                                      child: _pad(
-                                        color,
-                                        hasFile,
-                                        index,
-                                        pad.value,
-                                        fileName,
+                                      child: GestureDetector(
+                                        onSecondaryTapUp: (details) =>
+                                            _showPadOptions(
+                                              context,
+                                              index,
+                                              details.globalPosition,
+                                            ),
+                                        child: _pad(
+                                          color,
+                                          hasFile,
+                                          index,
+                                          pad.value,
+                                          fileName,
+                                        ),
                                       ),
                                     ),
                                   );
@@ -452,6 +461,11 @@ class HomeView extends GetView<HomeController> {
           tooltip: 'Add files',
           icon: const Icon(Icons.library_music),
           onPressed: controller.addFiles,
+        ),
+        IconButton(
+          tooltip: 'MIDI Devices',
+          icon: const Icon(Icons.piano),
+          onPressed: () => _showMidiDevicesDialog(context),
         ),
         IconButton(
           tooltip: 'Stop all',
@@ -733,6 +747,174 @@ class HomeView extends GetView<HomeController> {
         ),
       ),
     );
+  }
+
+  void _showMidiDevicesDialog(BuildContext context) {
+    Get.dialog(
+      AlertDialog(
+        title: const Text('MIDI Devices'),
+        content: SizedBox(
+          width: 300,
+          child: Obx(() {
+            final devices = controller.midiService.devices;
+            final connected = controller.midiService.connectedDevice.value;
+            if (devices.isEmpty) {
+              return const Text('No MIDI devices found.');
+            }
+            return ListView.builder(
+              shrinkWrap: true,
+              itemCount: devices.length,
+              itemBuilder: (ctx, i) {
+                final d = devices[i];
+                final isConnected = connected?.id == d.id;
+                return ListTile(
+                  title: Text(d.name),
+                  subtitle: Text(d.id),
+                  trailing: isConnected
+                      ? const Icon(Icons.check, color: Colors.green)
+                      : null,
+                  onTap: () {
+                    if (!isConnected) {
+                      controller.midiService.connect(d);
+                    } else {
+                      controller.midiService.disconnect();
+                    }
+                  },
+                );
+              },
+            );
+          }),
+        ),
+        actions: [
+          TextButton(
+            onPressed: controller.midiService.refreshDevices,
+            child: const Text('Refresh'),
+          ),
+          TextButton(onPressed: Get.back, child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  void _showMidiLearnDialog(int padIndex) {
+    StreamSubscription? sub;
+    Get.dialog(
+      AlertDialog(
+        title: const Text('Assign MIDI Trigger'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Press a key on your MIDI controller...'),
+            const SizedBox(height: 16),
+            Obx(() {
+              final current = controller.pads[padIndex].midiNote;
+              if (current != null) {
+                return Column(
+                  children: [
+                    Text(
+                      'Current: Note $current',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () {
+                        controller.assignMidiNote(padIndex, null);
+                        sub?.cancel();
+                        Get.back();
+                      },
+                      child: const Text('Remove Assignment'),
+                    ),
+                  ],
+                );
+              }
+              return const SizedBox.shrink();
+            }),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              sub?.cancel();
+              Get.back();
+            },
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    ).then((_) => sub?.cancel());
+
+    sub = controller.midiService.noteStream.listen((event) {
+      if (event.type == MidiEventType.noteOn) {
+        controller.assignMidiNote(padIndex, event.note);
+        sub?.cancel();
+        if (Get.isDialogOpen ?? false) Get.back();
+      }
+    });
+  }
+
+  void _showPadOptions(BuildContext context, int index, Offset position) {
+    showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        position.dx + 1,
+        position.dy + 1,
+      ),
+      items: [
+        const PopupMenuItem(
+          value: 'file',
+          child: ListTile(
+            leading: Icon(Icons.audio_file),
+            title: Text('Assign File'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'rename',
+          child: ListTile(
+            leading: Icon(Icons.edit),
+            title: Text('Rename'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'keyboard',
+          child: ListTile(
+            leading: Icon(Icons.keyboard),
+            title: Text('Keyboard Shortcut'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'midi',
+          child: ListTile(
+            leading: Icon(Icons.piano),
+            title: Text('MIDI Trigger'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'clear',
+          child: ListTile(
+            leading: Icon(Icons.clear),
+            title: Text('Clear Pad'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (value == 'file') controller.assignFileToPad(index);
+      if (value == 'rename') controller.startRenamingPad(index);
+      if (value == 'keyboard') _showKeyboardShortcutDialog(index);
+      if (value == 'midi') _showMidiLearnDialog(index);
+      if (value == 'clear') controller.clearPad(index);
+    });
   }
 
   Material _pad(
