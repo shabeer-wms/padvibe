@@ -91,6 +91,16 @@ class MidiService extends GetxService {
     sidecarStatus.value = 'Starting';
     lastError.value = '';
 
+    // Kill any existing midi_server processes to free up port 8765
+    try {
+      print('Cleaning up any existing midi_server processes...');
+      await Process.run('pkill', ['-9', 'midi_server']);
+      await Future.delayed(
+        const Duration(milliseconds: 500),
+      ); // Give OS time to release port
+    } catch (e) {
+      // Ignore errors if no process exists
+    }
     try {
       String executablePath;
       if (Platform.isMacOS) {
