@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:PadVibe/app/data/pad_model.dart';
 import 'package:PadVibe/app/service/audio_player_service.dart';
+import 'package:PadVibe/app/service/local_api_service.dart';
 import 'package:PadVibe/app/service/midi_service.dart';
 import 'package:PadVibe/app/service/storage_service.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
@@ -15,6 +16,7 @@ class HomeController extends GetxController {
   final audioService = Get.find<AudioPlayerService>();
   final midiService = Get.put(MidiService());
   final storage = Get.put(StorageService(), permanent: true);
+  final localApiService = Get.put(LocalApiService(), permanent: true);
 
   final count = 0.obs;
   // Signal to force UI updates (e.g. when seeking while paused)
@@ -113,7 +115,9 @@ class HomeController extends GetxController {
     // Listen to MIDI events
     midiService.noteStream.listen((event) {
       if (event.type == MidiEventType.noteOn) {
+        print('HomeController received MIDI Note On: ${event.note}');
         final index = pads.indexWhere((p) => p.midiNote == event.note);
+        print('Matching pad index: $index');
         if (index != -1) {
           playPad(index);
         }
@@ -482,5 +486,12 @@ class HomeController extends GetxController {
         ).catchError((_) {});
       });
     }
+  }
+  // --- Settings ---
+
+  String get remoteEndpointUrl => localApiService.remoteEndpointUrl.value;
+
+  void updateRemoteEndpoint(String url) {
+    localApiService.updateRemoteEndpoint(url);
   }
 }
