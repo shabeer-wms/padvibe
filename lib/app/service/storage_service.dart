@@ -206,4 +206,64 @@ class StorageService extends GetxService {
   }
 
   // --- end added ---
+
+  // --- added: remote endpoint and webhook interval persistence ---
+
+  Future<void> saveRemoteEndpointUrl(String url) async {
+    if (kIsWeb) return;
+    final file = await _ensureFile();
+    Map<String, dynamic> data = {};
+
+    if (await file.exists()) {
+      final content = await file.readAsString();
+      if (content.isNotEmpty) {
+        data = jsonDecode(content) as Map<String, dynamic>;
+      }
+    }
+
+    data['remoteEndpointUrl'] = url;
+    await file.writeAsString(jsonEncode(data));
+  }
+
+  Future<String?> getRemoteEndpointUrl() async {
+    if (kIsWeb) return null;
+    final file = await _ensureFile();
+    if (!await file.exists()) return null;
+
+    final content = await file.readAsString();
+    if (content.isEmpty) return null;
+
+    final jsonMap = jsonDecode(content) as Map<String, dynamic>;
+    return jsonMap['remoteEndpointUrl'] as String?;
+  }
+
+  Future<void> saveWebhookInterval(int intervalMs) async {
+    if (kIsWeb) return;
+    final file = await _ensureFile();
+    Map<String, dynamic> data = {};
+
+    if (await file.exists()) {
+      final content = await file.readAsString();
+      if (content.isNotEmpty) {
+        data = jsonDecode(content) as Map<String, dynamic>;
+      }
+    }
+
+    data['webhookIntervalMs'] = intervalMs;
+    await file.writeAsString(jsonEncode(data));
+  }
+
+  Future<int?> getWebhookInterval() async {
+    if (kIsWeb) return null;
+    final file = await _ensureFile();
+    if (!await file.exists()) return null;
+
+    final content = await file.readAsString();
+    if (content.isEmpty) return null;
+
+    final jsonMap = jsonDecode(content) as Map<String, dynamic>;
+    return jsonMap['webhookIntervalMs'] as int?;
+  }
+
+  // --- end added ---
 }

@@ -460,6 +460,11 @@ class HomeView extends GetView<HomeController> {
       centerTitle: false,
       actions: [
         IconButton(
+          tooltip: 'Settings',
+          icon: const Icon(Icons.settings),
+          onPressed: () => _showSettingsDialog(context),
+        ),
+        IconButton(
           tooltip: 'Add files',
           icon: const Icon(Icons.library_music),
           onPressed: controller.addFiles,
@@ -1319,6 +1324,46 @@ class HomeView extends GetView<HomeController> {
     final m = d.inMinutes;
     final s = d.inSeconds % 60;
     return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
+  void _showSettingsDialog(BuildContext context) {
+    final urlCtrl = TextEditingController(text: controller.remoteEndpointUrl);
+    Get.dialog(
+      AlertDialog(
+        title: const Text('Settings'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Local API Server running on port 9696',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 16),
+            const Text('Remote Webhook URL (POST)'),
+            const SizedBox(height: 8),
+            TextField(
+              controller: urlCtrl,
+              decoration: const InputDecoration(
+                hintText: 'http://example.com/webhook',
+                border: OutlineInputBorder(),
+                helperText: 'App will POST state here every 1s',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: Get.back, child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              controller.updateRemoteEndpoint(urlCtrl.text.trim());
+              Get.back();
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
   }
 }
 
