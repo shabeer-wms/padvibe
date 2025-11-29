@@ -53,6 +53,12 @@ class MidiService extends GetxService {
   Future<void> refreshDevices() async {
     final list = await _midiCommand.devices;
     devices.assignAll(list ?? []);
+    print('MIDI Devices found: ${devices.length}');
+    for (var device in devices) {
+      print(
+        ' - Device: ${device.name} (ID: ${device.id}, Type: ${device.type})',
+      );
+    }
   }
 
   Future<void> connect(MidiDevice device) async {
@@ -61,15 +67,20 @@ class MidiService extends GetxService {
     }
 
     try {
+      print('Attempting to connect to device: ${device.name} (${device.id})');
       await _midiCommand.connectToDevice(device);
+      print('Successfully connected to device: ${device.name}');
     } catch (e) {
+      print('Error connecting to device: $e');
       if (e.toString().contains("Device already connected")) {
         try {
+          print('Device already connected, attempting to reconnect...');
           _midiCommand.disconnectDevice(device);
           await Future.delayed(const Duration(milliseconds: 200));
           await _midiCommand.connectToDevice(device);
+          print('Reconnection successful');
         } catch (retryError) {
-          // Retry failed, but continue anyway
+          print('Retry failed: $retryError');
         }
       }
     }
