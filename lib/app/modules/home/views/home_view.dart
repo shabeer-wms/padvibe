@@ -770,30 +770,78 @@ class HomeView extends GetView<HomeController> {
           child: Obx(() {
             final devices = controller.midiService.devices;
             final connected = controller.midiService.connectedDevice.value;
-            if (devices.isEmpty) {
-              return const Text('No MIDI devices found.');
+            final wsStatus = controller.midiService.wsConnectionStatus.value;
+            final sidecarStatus = controller.midiService.sidecarStatus.value;
+
+            // Show loading if not connected to WS yet
+            if (wsStatus != 'Connected') {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 16),
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text('Sidecar: $sidecarStatus'),
+                  Text('Connection: $wsStatus'),
+                  if (controller.midiService.lastError.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      controller.midiService.lastError.value,
+                      style: const TextStyle(color: Colors.red, fontSize: 12),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                ],
+              );
             }
-            return ListView.builder(
-              shrinkWrap: true,
-              itemCount: devices.length,
-              itemBuilder: (ctx, i) {
-                final d = devices[i];
-                final isConnected = connected?.id == d.id;
-                return ListTile(
-                  title: Text(d.name),
-                  subtitle: Text(d.id),
-                  trailing: isConnected
-                      ? const Icon(Icons.check, color: Colors.green)
-                      : null,
-                  onTap: () {
-                    if (!isConnected) {
-                      controller.midiService.connect(d);
-                    } else {
-                      controller.midiService.disconnect();
-                    }
+
+            if (devices.isEmpty) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('No MIDI devices found.'),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: controller.midiService.refreshDevices,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Refresh'),
+                  ),
+                ],
+              );
+            }
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: devices.length,
+                  itemBuilder: (ctx, i) {
+                    final d = devices[i];
+                    final isConnected = connected?.id == d.id;
+                    return ListTile(
+                      title: Text(d.name),
+                      subtitle: Text(d.id),
+                      trailing: isConnected
+                          ? const Icon(Icons.check, color: Colors.green)
+                          : null,
+                      onTap: () {
+                        if (!isConnected) {
+                          controller.midiService.connect(d);
+                        } else {
+                          controller.midiService.disconnect();
+                        }
+                      },
+                    );
                   },
-                );
-              },
+                ),
+                const Divider(),
+                TextButton.icon(
+                  onPressed: controller.midiService.refreshDevices,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Refresh List'),
+                ),
+              ],
             );
           }),
         ),
