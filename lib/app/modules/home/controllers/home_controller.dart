@@ -115,7 +115,9 @@ class HomeController extends GetxController {
     // Listen to MIDI events
     midiService.noteStream.listen((event) {
       if (event.type == MidiEventType.noteOn) {
+        print('HomeController received MIDI Note On: ${event.note}');
         final index = pads.indexWhere((p) => p.midiNote == event.note);
+        print('Matching pad index: $index');
         if (index != -1) {
           playPad(index);
         }

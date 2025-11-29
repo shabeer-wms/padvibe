@@ -51,12 +51,16 @@ class MidiService extends GetxService {
   }
 
   Future<void> refreshDevices() async {
+    print('Refreshing MIDI devices...');
     final list = await _midiCommand.devices;
     devices.assignAll(list ?? []);
     print('MIDI Devices found: ${devices.length}');
+    if (devices.isEmpty) {
+      print('No MIDI devices found. Please check connections and permissions.');
+    }
     for (var device in devices) {
       print(
-        ' - Device: ${device.name} (ID: ${device.id}, Type: ${device.type})',
+        ' - Device: ${device.name} (ID: ${device.id}, Type: ${device.type}, Connected: ${device.connected})',
       );
     }
   }
@@ -94,6 +98,8 @@ class MidiService extends GetxService {
 
   void _handleMidiPacket(MidiPacket packet) {
     if (packet.data.isEmpty) return;
+
+    print('MIDI Packet Received: ${packet.data}');
 
     final status = packet.data[0];
     final command = status & 0xF0;
