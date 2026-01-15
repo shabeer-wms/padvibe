@@ -6,7 +6,6 @@ import 'package:padvibe/app/service/local_api_service.dart';
 import 'package:padvibe/app/service/midi_interface_service.dart';
 import 'package:padvibe/app/service/sidecar_service.dart';
 import 'package:padvibe/app/service/storage_service.dart';
-import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -37,8 +36,6 @@ class HomeController extends GetxController {
   final masterVolume = 1.0.obs; // Master volume control (0.0 to 1.0)
   Timer? _ticker;
 
-  // Track the created timer window id to push updates
-  int? _timerWindowId;
   Timer? _deviceSwitchDebounce;
   final Map<int, Timer> _padUpdateDebounce = {};
 
@@ -105,52 +102,41 @@ class HomeController extends GetxController {
   @override
   void onInit() {
     super.onInit();
-    // Load persisted groups
-    () async {
-      await storage.init();
-      final loadedGroups = await storage.loadPadGroups();
 
-      if (loadedGroups.isNotEmpty) {
+    // Get pre-loaded data from splash screen
+    final args = Get.arguments as Map<String, dynamic>?;
+
+    if (args != null) {
+      // Load groups from splash
+      final loadedGroups = args['groups'] as List<PadGroup>?;
+      if (loadedGroups != null && loadedGroups.isNotEmpty) {
         groups.assignAll(loadedGroups);
-      } else {
-        // Initial default group if nothing loaded (should be handled by storage migration, but safe fallback)
-        groups.add(
-          PadGroup(
-            id: 'default',
-            name: 'Default',
-            pads: List.generate(20, (i) => Pad(name: 'Pad ${i + 1}')),
-          ),
-        );
-      }
-
-      // Initialize pads from the first group
-      if (groups.isNotEmpty) {
-        pads.assignAll(groups[0].pads);
+        pads.assignAll(loadedGroups[0].pads);
         currentGroupIndex.value = 0;
       }
 
-      // Sanitize missing files (check current group only for now, or all?)
-      // Ideally check all, but for performance let's check current on load, or lazy load.
-      // For now, let's just stick to the existing logic but apply it to the active pads
-      // and maybe iterate all groups if needed.
-      // To avoid complexity, we'll just sanitize the active pads when they are loaded.
-      await _sanitizeCurrentPads();
+      // Load grid columns from splash
+      final loadedGridCols = args['gridColumns'] as int?;
+      if (loadedGridCols != null) {
+        gridColumns.value = loadedGridCols;
+      }
+
+      // Sanitize pads and load waveforms
+      _sanitizeCurrentPads();
       _loadAllWaveforms();
-    }();
+
+      // Restore audio device from splash-provided data
+      final savedDeviceName = args['savedAudioDeviceName'] as String?;
+      final savedDeviceId = args['savedAudioDeviceId'] as int?;
+
+      if (savedDeviceName != null || savedDeviceId != null) {
+        _restoreAudioDevice(savedDeviceName, savedDeviceId);
+      }
+    }
 
     _ticker = Timer.periodic(const Duration(milliseconds: 16), (_) async {
       final v = audioService.getRemainingTime();
       remainingSeconds.value = v;
-
-      // Push updates to the secondary window if it exists
-      final id = _timerWindowId;
-      if (id != null) {
-        try {
-          await DesktopMultiWindow.invokeMethod(id, 'update_secs', v);
-        } catch (_) {
-          // Ignore if window was closed or not ready
-        }
-      }
     });
 
     // Listen to MIDI events
@@ -167,40 +153,43 @@ class HomeController extends GetxController {
       }
     });
 
-    // Restore saved audio output device
-    () async {
-      final savedDeviceName = await storage.getSavedAudioDeviceName();
-      final savedDeviceId = await storage.getSavedAudioDeviceId();
-
-      if (savedDeviceName != null || savedDeviceId != null) {
-        // Wait for devices to be enumerated (max 5 seconds)
-        int retries = 0;
-        while (audioService.outputDevices.isEmpty && retries < 10) {
-          await Future.delayed(const Duration(milliseconds: 500));
-          retries++;
-        }
-
-        if (audioService.outputDevices.isNotEmpty) {
-          PlaybackDevice? device;
-
-          // Try matching by name first (most reliable)
-          if (savedDeviceName != null) {
-            device = audioService.outputDevices.firstWhereOrNull(
-              (d) => d.name == savedDeviceName,
-            );
-          }
-
-          // Fallback to ID
-          device ??= audioService.outputDevices.firstWhereOrNull(
-            (d) => d.id == savedDeviceId,
-          );
-
-          if (device != null) {
-            await audioService.selectOutputDevice(device);
-          }
-        }
+    // Reload waveforms when Sidecar reconnects
+    ever(sidecarService.wsConnectionStatus, (status) {
+      if (status == 'Connected') {
+        _loadAllWaveforms();
       }
-    }();
+    });
+  }
+
+  Future<void> _restoreAudioDevice(String? deviceName, int? deviceId) async {
+    if (deviceName == null && deviceId == null) return;
+
+    // Wait for devices to be enumerated (max 5 seconds)
+    int retries = 0;
+    while (audioService.outputDevices.isEmpty && retries < 10) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      retries++;
+    }
+
+    if (audioService.outputDevices.isNotEmpty) {
+      PlaybackDevice? device;
+
+      // Try matching by name first (most reliable)
+      if (deviceName != null) {
+        device = audioService.outputDevices.firstWhereOrNull(
+          (d) => d.name == deviceName,
+        );
+      }
+
+      // Fallback to ID
+      device ??= audioService.outputDevices.firstWhereOrNull(
+        (d) => d.id == deviceId,
+      );
+
+      if (device != null) {
+        await audioService.selectOutputDevice(device);
+      }
+    }
   }
 
   Future<void> _sanitizeCurrentPads() async {
@@ -244,7 +233,7 @@ class HomeController extends GetxController {
 
   void updateGridColumns(int cols) {
     gridColumns.value = cols;
-    // Persist later
+    storage.saveGridColumns(cols);
   }
 
   // --- Tab Management ---
@@ -619,30 +608,6 @@ class HomeController extends GetxController {
     await _saveGroups();
   }
 
-  Future<void> showOverlay(BuildContext context) async {
-    // Create secondary window and remember its id
-    final window = await DesktopMultiWindow.createWindow('timer');
-    _timerWindowId = window.windowId;
-    // Pass a simple non-empty string; main.dart only checks args.isNotEmpty
-    window
-      ..setFrame(const Offset(100, 100) & const Size(800, 600))
-      ..center()
-      ..show();
-
-    // Send an initial value so the overlay starts immediately
-    final id = _timerWindowId;
-    if (id != null) {
-      // Allow a short delay for handler registration in the secondary window
-      Future.delayed(const Duration(milliseconds: 150), () {
-        final v = audioService.getRemainingTime();
-        DesktopMultiWindow.invokeMethod(
-          id,
-          'update_secs',
-          v,
-        ).catchError((_) {});
-      });
-    }
-  }
   // --- Settings ---
 
   String get remoteEndpointUrl => localApiService.remoteEndpointUrl.value;

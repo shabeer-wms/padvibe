@@ -413,8 +413,9 @@ class AudioEngine:
                 if peak > 0:
                     waveform /= peak
                 
-                return waveform.tolist()
+                duration = frames / f.samplerate
+                return waveform.tolist(), duration
 
         except Exception as e:
             print(f"Error generating waveform: {e}")
-            return []
+            return [], 0.0

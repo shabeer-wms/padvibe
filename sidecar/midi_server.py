@@ -201,11 +201,12 @@ async def handle_websocket(websocket):
                     file_path = data.get("file_path")
                     # Run in thread to avoid blocking loop
                     points = data.get("points", 100)
-                    waveform = await asyncio.to_thread(audio_engine.get_waveform, file_path, points)
+                    waveform, duration = await asyncio.to_thread(audio_engine.get_waveform, file_path, points)
                     await websocket.send(json.dumps({
                         "type": "waveform_data",
                         "file_path": file_path,
-                        "data": waveform
+                        "data": waveform,
+                        "duration": duration
                     }))
 
                 elif command == "shutdown":

@@ -206,6 +206,15 @@ class StorageService extends GetxService {
     return data?['webhookIntervalMs'] as int?;
   }
 
+  Future<void> saveGridColumns(int columns) async {
+    await _updateSettings({'gridColumns': columns});
+  }
+
+  Future<int?> getGridColumns() async {
+    final data = await _loadRawData();
+    return data?['gridColumns'] as int?;
+  }
+
   Future<void> clear() async {
     if (kIsWeb) return;
     final file = await _ensureFile();

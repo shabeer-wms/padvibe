@@ -6,10 +6,19 @@ import 'package:padvibe/app/service/sidecar_service.dart';
 import 'package:padvibe/app/service/storage_service.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:flutter_single_instance/flutter_single_instance.dart';
+import 'dart:io';
 import 'app/routes/app_pages.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Only allow one instance
+  final isFirstInstance = await FlutterSingleInstance().isFirstInstance();
+  if (!isFirstInstance) {
+    await FlutterSingleInstance().focus();
+    exit(0);
+  }
 
   // Initialize services in order of dependency
   await Get.putAsync(() => StorageService().init());

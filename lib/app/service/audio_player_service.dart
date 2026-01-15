@@ -71,6 +71,8 @@ class AudioPlayerService extends GetxService {
 
   // Cached waveforms: path -> normalized amplitude data
   final Map<String, List<double>> _waveforms = {};
+  // Cached durations: path -> duration in seconds
+  final Map<String, double> _fileDurations = {};
   final _waveformStreamController = StreamController<String>.broadcast();
   Stream<String> get waveformUpdates => _waveformStreamController.stream;
 
@@ -188,8 +190,12 @@ class AudioPlayerService extends GetxService {
 
   void _handleWaveformData(Map<String, dynamic> event) {
     final path = event['file_path'] as String;
-    final data = (event['data'] as List).cast<double>();
+    final data = (event['data'] as List).map((e) => (e as num).toDouble()).toList();
+    final duration = (event['duration'] as num?)?.toDouble() ?? 0.0;
     _waveforms[path] = data;
+    if (duration > 0) {
+      _fileDurations[path] = duration;
+    }
     _waveformStreamController.add(path);
   }
 
@@ -424,6 +430,10 @@ class AudioPlayerService extends GetxService {
       if (stream.path == path) {
         return Duration(milliseconds: (stream.durationSeconds * 1000).toInt());
       }
+    }
+    final cached = _fileDurations[path];
+    if (cached != null) {
+      return Duration(milliseconds: (cached * 1000).toInt());
     }
     return Duration.zero;
   }
