@@ -44,6 +44,27 @@ async def broadcast(message):
                 to_remove.add(client)
         clients.difference_update(to_remove)
 
+async def broadcast_levels():
+    """Periodically broadcasts audio levels."""
+    while True:
+        try:
+            if clients:
+                levels = audio_engine.get_levels()
+                # Only send if non-zero or occasionally to clear?
+                # Optimization: Send only if changed significantly? 
+                # For smooth UI, we send at ~30Hz
+                await broadcast(json.dumps({
+                    "type": "audio_levels",
+                    "rms_l": levels[0],
+                    "rms_r": levels[1],
+                    "peak_l": levels[2],
+                    "peak_r": levels[3]
+                }))
+            await asyncio.sleep(0.05) # 20 FPS
+        except Exception as e:
+            print(f"Level broadcast error: {e}")
+            await asyncio.sleep(1)
+
 async def handle_websocket(websocket):
     """Handles incoming WebSocket connections and messages."""
     print("Client connected")
@@ -141,6 +162,10 @@ async def handle_websocket(websocket):
                         "type": "all_audio_stopped"
                     }))
 
+                elif command == "set_master_volume":
+                    vol = data.get("volume", 1.0)
+                    audio_engine.set_master_volume(vol)
+
                 elif command == "set_volume":
                     stream_id = data.get("stream_id")
                     vol = data.get("volume")
@@ -176,11 +201,12 @@ async def handle_websocket(websocket):
                     file_path = data.get("file_path")
                     # Run in thread to avoid blocking loop
                     points = data.get("points", 100)
-                    waveform = await asyncio.to_thread(audio_engine.get_waveform, file_path, points)
+                    waveform, duration = await asyncio.to_thread(audio_engine.get_waveform, file_path, points)
                     await websocket.send(json.dumps({
                         "type": "waveform_data",
                         "file_path": file_path,
-                        "data": waveform
+                        "data": waveform,
+                        "duration": duration
                     }))
 
                 elif command == "shutdown":
@@ -210,6 +236,9 @@ async def main():
     
     # Start MIDI Listener Task
     asyncio.create_task(midi_engine.start_listener())
+    
+    # Start Audio Level Broadcast Task
+    asyncio.create_task(broadcast_levels())
 
     print("Starting WebSocket server on ws://127.0.0.1:8765", flush=True)
     async with websockets.serve(handle_websocket, "127.0.0.1", 8765):

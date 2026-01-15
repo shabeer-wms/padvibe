@@ -1,10 +1,9 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'dart:math' as math;
 import 'package:collection/collection.dart';
 
 import 'package:get/get.dart';
-import 'package:PadVibe/app/service/audio_engine_service.dart';
+import 'package:padvibe/app/service/audio_engine_service.dart';
 
 // --- Types Compatibility ---
 typedef SoundHandle = int;
@@ -72,6 +71,8 @@ class AudioPlayerService extends GetxService {
 
   // Cached waveforms: path -> normalized amplitude data
   final Map<String, List<double>> _waveforms = {};
+  // Cached durations: path -> duration in seconds
+  final Map<String, double> _fileDurations = {};
   final _waveformStreamController = StreamController<String>.broadcast();
   Stream<String> get waveformUpdates => _waveformStreamController.stream;
 
@@ -83,6 +84,9 @@ class AudioPlayerService extends GetxService {
   // --- added: expose master RMS levels for meters ---
   double masterRmsL = 0.0;
   double masterRmsR = 0.0;
+  final RxDouble masterPeakL = 0.0.obs;
+  final RxDouble masterPeakR = 0.0.obs;
+  final RxDouble masterVolume = 1.0.obs;
   // --- end added ---
 
   StreamSubscription? _audioEventSub;
@@ -108,6 +112,8 @@ class AudioPlayerService extends GetxService {
         _handleAudioLoopUpdated(event);
       } else if (type == 'waveform_data') {
         _handleWaveformData(event);
+      } else if (type == 'audio_levels') {
+        _handleAudioLevels(event);
       }
     });
 
@@ -166,6 +172,13 @@ class AudioPlayerService extends GetxService {
     activeHandles.add(streamId);
   }
 
+  void _handleAudioLevels(Map<String, dynamic> event) {
+    masterRmsL = (event['rms_l'] as num).toDouble();
+    masterRmsR = (event['rms_r'] as num).toDouble();
+    masterPeakL.value = (event['peak_l'] as num).toDouble();
+    masterPeakR.value = (event['peak_r'] as num).toDouble();
+  }
+
   void _handleAudioLoopUpdated(Map<String, dynamic> event) {
     final streamId = event['stream_id'] as int;
     final loop = event['loop'] as bool;
@@ -177,8 +190,12 @@ class AudioPlayerService extends GetxService {
 
   void _handleWaveformData(Map<String, dynamic> event) {
     final path = event['file_path'] as String;
-    final data = (event['data'] as List).cast<double>();
+    final data = (event['data'] as List).map((e) => (e as num).toDouble()).toList();
+    final duration = (event['duration'] as num?)?.toDouble() ?? 0.0;
     _waveforms[path] = data;
+    if (duration > 0) {
+      _fileDurations[path] = duration;
+    }
     _waveformStreamController.add(path);
   }
 
@@ -414,6 +431,10 @@ class AudioPlayerService extends GetxService {
         return Duration(milliseconds: (stream.durationSeconds * 1000).toInt());
       }
     }
+    final cached = _fileDurations[path];
+    if (cached != null) {
+      return Duration(milliseconds: (cached * 1000).toInt());
+    }
     return Duration.zero;
   }
 
@@ -462,6 +483,11 @@ class AudioPlayerService extends GetxService {
   Future<void> refreshOutputDevices() async {
     if (!isInitialized.value) return;
     _audioEngine.refreshAudioDevices();
+  }
+
+  void setMasterVolume(double volume) {
+    masterVolume.value = volume;
+    _audioEngine.setMasterVolume(volume);
   }
 
   Future<void> selectOutputDevice(PlaybackDevice device) async {

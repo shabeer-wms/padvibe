@@ -1,13 +1,12 @@
 import 'dart:math' as math;
 import 'dart:async'; // added
-import 'dart:ui'; // for FontFeature
-import 'package:PadVibe/app/data/pad_model.dart';
+import 'package:padvibe/app/data/pad_model.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
-import 'package:PadVibe/app/service/midi_interface_service.dart'; // updated
+import 'package:padvibe/app/service/midi_interface_service.dart'; // updated
 import '../controllers/home_controller.dart';
 
 class HomeView extends GetView<HomeController> {
@@ -68,14 +67,6 @@ class HomeView extends GetView<HomeController> {
   // --- End added ---
 
   // --- Added: overlay controls (toggle/show/hide) ---
-  void _toggleTimerOverlay(BuildContext context) {
-    if (_timerOverlay == null) {
-      _showTimerOverlay(context);
-    } else {
-      _hideTimerOverlay();
-    }
-  }
-
   void _showTimerOverlay(BuildContext context) {
     if (_timerOverlay != null) return;
     final overlay = Overlay.of(context);
@@ -105,12 +96,12 @@ class HomeView extends GetView<HomeController> {
                         decoration: BoxDecoration(
                           color: Theme.of(
                             ctx,
-                          ).colorScheme.surface.withOpacity(0.98),
+                          ).colorScheme.surface.withValues(alpha: 0.98),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
                             color: Theme.of(
                               ctx,
-                            ).colorScheme.primary.withOpacity(0.35),
+                            ).colorScheme.primary.withValues(alpha: 0.35),
                           ),
                           boxShadow: const [
                             BoxShadow(
@@ -139,8 +130,8 @@ class HomeView extends GetView<HomeController> {
                                   style: TextStyle(
                                     fontSize: fontSize,
                                     fontWeight: FontWeight.w700,
-                                    color: accent.withOpacity(
-                                      blinking ? 1.0 : 0.45,
+                                    color: accent.withValues(
+                                      alpha: blinking ? 1.0 : 0.45,
                                     ),
                                     fontFeatures: const [
                                       FontFeature.tabularFigures(),
@@ -191,9 +182,8 @@ class HomeView extends GetView<HomeController> {
                                     child: Icon(
                                       Icons.open_in_full,
                                       size: 16,
-                                      color: Theme.of(
-                                        ctx,
-                                      ).colorScheme.onSurface.withOpacity(0.6),
+                                      color: Theme.of(ctx).colorScheme.onSurface
+                                          .withValues(alpha: 0.6),
                                     ),
                                   ),
                                 ),
@@ -245,6 +235,9 @@ class HomeView extends GetView<HomeController> {
         autofocus: true,
         focusNode: controller.focusNode,
         onKeyEvent: (node, event) {
+          // IMPORTANT: Ignore shortcuts if we are currently editing a pad name
+          if (controller.editingPadIndex.value != -1) return KeyEventResult.ignored;
+
           if (event is KeyDownEvent) {
             // Space key stops all
             if (event.logicalKey == LogicalKeyboardKey.space) {
@@ -277,25 +270,27 @@ class HomeView extends GetView<HomeController> {
           }
           return KeyEventResult.ignored;
         },
-        child: Row(
-          children: [
+        child: GestureDetector(
+          onTap: () => controller.focusNode.requestFocus(),
+          behavior: HitTestBehavior.opaque,
+          child: Row(
+            children: [
             Expanded(
               child: Column(
                 children: [
                   Expanded(
                     child: Obx(() {
                       // Read the ticker to trigger rebuilds for progress bars.
-                      final _ = controller.remainingSeconds.value;
+                      controller.remainingSeconds.value;
                       // Also observe active handles for immediate play/pause updates
-                      final __ = controller.audioService.activeHandles.length;
+                      controller.audioService.activeHandles.length;
                       // Also observe manual force updates (e.g. seeking while paused)
-                      final ___ = controller.forceUpdate.value;
+                      controller.forceUpdate.value;
                       return Padding(
                         padding: const EdgeInsets.all(12),
                         child: LayoutBuilder(
                           builder: (context, constraints) {
                             return Obx(() {
-                              final width = constraints.maxWidth;
                               const spacing = 12.0;
                               final cols = controller.gridColumns.value;
                               final childAspect = 4 / 3;
@@ -356,25 +351,13 @@ class HomeView extends GetView<HomeController> {
                                           f.path,
                                         );
                                       },
-                                      child: GestureDetector(
-                                        onSecondaryTapUp: (details) =>
-                                            _showPadOptions(
-                                              context,
-                                              index,
-                                              details.globalPosition,
-                                            ),
-                                        onTap: hasFile
-                                            ? () => controller.playPad(index)
-                                            : null,
-                                        onLongPress: () =>
-                                            controller.assignFileToPad(index),
-                                        child: _pad(
-                                          color,
-                                          hasFile,
-                                          index,
-                                          pad.value,
-                                          fileName,
-                                        ),
+                                      child: _pad(
+                                        color,
+                                        hasFile,
+                                        index,
+                                        pad.value,
+                                        fileName,
+                                        context,
                                       ),
                                     ),
                                   );
@@ -386,29 +369,17 @@ class HomeView extends GetView<HomeController> {
                       );
                     }),
                   ),
-                  Obx(() {
-                    final secs = controller.remainingSeconds.value;
-                    final accent = _urgencyColor(context, secs);
-                    return Text(
-                      'Remaining: ${_formatRemaining(secs)}',
-                      style: TextStyle(
-                        color: accent,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        fontFeatures: const [
-                          FontFeature.tabularFigures(),
-                        ],
-                      ),
-                    );
-                  }).paddingAll(10),
+                  _buildBottomPanel(context),
                 ],
               ),
             ),
+            _buildMasterMonitor(context),
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   AppBar _appBar(BuildContext context) {
     return AppBar(
@@ -437,11 +408,6 @@ class HomeView extends GetView<HomeController> {
           onPressed: () => _showSettingsDialog(context),
         ),
         IconButton(
-          tooltip: 'Add files',
-          icon: const Icon(Icons.library_music),
-          onPressed: controller.addFiles,
-        ),
-        IconButton(
           tooltip: 'MIDI Devices',
           icon: const Icon(Icons.piano),
           onPressed: () => _showMidiDevicesDialog(context),
@@ -452,93 +418,134 @@ class HomeView extends GetView<HomeController> {
           onPressed: () => _showAudioOutputDialog(context),
         ),
         IconButton(
-          tooltip: 'Stop all',
-          icon: const Icon(Icons.stop_circle_outlined),
-          onPressed: controller.stopAll,
-        ),
-        IconButton(
-          tooltip: 'Clear all',
-          icon: const Icon(Icons.delete_sweep_outlined),
-          onPressed: () async {
-            final ok = await showDialog<bool>(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                title: const Text('Clear all pads?'),
-                content: const Text(
-                  'This stops playback, removes assigned files, and clears saved layout.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Get.back(result: false),
-                    child: const Text('Cancel'),
-                  ),
-                  FilledButton(
-                    onPressed: () => Get.back(result: true),
-                    child: const Text('Clear'),
-                  ),
-                ],
-              ),
-            );
-            if (ok == true) {
-              await controller.clearAll();
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('All pads cleared')),
-                );
-              }
+          tooltip: 'Power',
+          icon: const Icon(Icons.power_settings_new),
+          onPressed: () {
+            if (_timerOverlay == null) {
+              _showTimerOverlay(context);
+            } else {
+              _hideTimerOverlay();
             }
           },
         ),
+        const SizedBox(width: 8),
       ],
     );
   }
 
-  Widget _buildTabs(BuildContext context) {
+  Widget _buildBottomPanel(BuildContext context) {
     return Container(
-      height: 50,
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      height: 60,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: Border(
+          top: BorderSide(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            width: 1,
+          ),
+        ),
+      ),
       child: Row(
         children: [
+          // Tabs section
           Expanded(
             child: Obx(() {
-              return ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: controller.groups.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (context, index) {
-                  final group = controller.groups[index];
-                  return Obx(() {
-                    final isSelected =
-                        controller.currentGroupIndex.value == index;
-                    return GestureDetector(
-                      onSecondaryTapUp: (details) => _showTabOptions(
-                        context,
-                        index,
-                        details.globalPosition,
-                      ),
-                      onDoubleTapDown: (details) => _showRenameTabPopover(
-                        context,
-                        index,
-                        details.globalPosition,
-                      ),
-                      child: ChoiceChip(
-                        label: Text(group.name),
-                        selected: isSelected,
-                        onSelected: (_) => controller.switchTab(index),
-                      ),
-                    );
-                  });
-                },
+              return Row(
+                children: [
+                  // Tabs
+                  Flexible(
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: controller.groups.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) {
+                        final group = controller.groups[index];
+                        return Obx(() {
+                          final isSelected =
+                              controller.currentGroupIndex.value == index;
+                          return GestureDetector(
+                            onSecondaryTapUp: (details) => _showTabOptions(
+                              context,
+                              index,
+                              details.globalPosition,
+                            ),
+                            onDoubleTapDown: (details) => _showRenameTabPopover(
+                              context,
+                              index,
+                              details.globalPosition,
+                            ),
+                            child: ChoiceChip(
+                              label: Text(group.name),
+                              selected: isSelected,
+                              onSelected: (_) => controller.switchTab(index),
+                            ),
+                          );
+                        });
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // Add tab button
+                  IconButton(
+                    icon: const Icon(Icons.add),
+                    onPressed: () => _showAddTabDialog(context),
+                    tooltip: 'Add Tab',
+                    iconSize: 20,
+                  ),
+                ],
               );
             }),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 16),
+          // Timer display with icon
+          Obx(() {
+            final secs = controller.remainingSeconds.value;
+            final accent = _urgencyColor(context, secs);
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.access_time, color: accent, size: 18),
+                const SizedBox(width: 6),
+                Text(
+                  'Remaining: ${_formatRemaining(secs)}',
+                  style: TextStyle(
+                    color: accent,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            );
+          }),
+          const SizedBox(width: 16),
+          // Stop All button
           IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: () => _showAddTabDialog(context),
-            tooltip: 'Add Tab',
+            tooltip: 'Stop all',
+            icon: const Icon(Icons.stop_circle),
+            onPressed: controller.stopAll,
+            iconSize: 24,
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildMasterMonitor(BuildContext context) {
+    return Container(
+      width: 140,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: Border(
+          left: BorderSide(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            width: 1,
+          ),
+        ),
+      ),
+      child: Center(
+        child: _MasterAudioMeter(controller: controller),
       ),
     );
   }
@@ -595,10 +602,11 @@ class HomeView extends GetView<HomeController> {
           ),
           onTap: () {
             // Slight delay to allow menu to close before showing dialog/popover
-            Future.delayed(
-              const Duration(milliseconds: 100),
-              () => _showRenameTabPopover(context, index, position),
-            );
+            Future.delayed(const Duration(milliseconds: 100), () {
+              if (context.mounted) {
+                _showRenameTabPopover(context, index, position);
+              }
+            });
           },
         ),
         PopupMenuItem(
@@ -610,10 +618,11 @@ class HomeView extends GetView<HomeController> {
             dense: true,
           ),
           onTap: () {
-            Future.delayed(
-              const Duration(milliseconds: 100),
-              () => _showDeleteTabConfirmation(context, index),
-            );
+            Future.delayed(const Duration(milliseconds: 100), () {
+              if (context.mounted) {
+                _showDeleteTabConfirmation(context, index);
+              }
+            });
           },
         ),
       ],
@@ -682,27 +691,42 @@ class HomeView extends GetView<HomeController> {
   }
 
   void _showKeyboardShortcutDialog(int padIndex) {
+    final focusNode = FocusNode();
     Get.dialog(
-      KeyboardListener(
-        autofocus: true,
-        focusNode: FocusNode()..requestFocus(),
-        onKeyEvent: (event) {
-          if (event is KeyDownEvent) {
-            final key = event.logicalKey;
-            String? keyLabel;
+      GestureDetector(
+        onTap: () => focusNode.requestFocus(),
+        child: KeyboardListener(
+          autofocus: true,
+          focusNode: focusNode..requestFocus(),
+          onKeyEvent: (event) {
+            if (event is KeyDownEvent) {
+              final key = event.logicalKey;
+              
+              // Skip modifier keys alone
+              if (key == LogicalKeyboardKey.shiftLeft || 
+                  key == LogicalKeyboardKey.shiftRight ||
+                  key == LogicalKeyboardKey.controlLeft ||
+                  key == LogicalKeyboardKey.controlRight ||
+                  key == LogicalKeyboardKey.altLeft ||
+                  key == LogicalKeyboardKey.altRight ||
+                  key == LogicalKeyboardKey.metaLeft ||
+                  key == LogicalKeyboardKey.metaRight) {
+                return;
+              }
 
-            // Get a human-readable key label
-            if (key.keyLabel.isNotEmpty) {
-              keyLabel = key.keyLabel.toUpperCase();
-            }
+              String? keyLabel;
+              // Get a human-readable key label
+              if (key.keyLabel.isNotEmpty) {
+                keyLabel = key.keyLabel.toUpperCase();
+              }
 
-            if (keyLabel != null && keyLabel.isNotEmpty) {
-              controller.assignKeyboardShortcut(padIndex, keyLabel);
-              Get.back();
+              if (keyLabel != null && keyLabel.isNotEmpty) {
+                controller.assignKeyboardShortcut(padIndex, keyLabel);
+                Get.back();
+              }
             }
-          }
-        },
-        child: AlertDialog(
+          },
+          child: AlertDialog(
           title: const Text('Assign Keyboard Shortcut'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -730,8 +754,9 @@ class HomeView extends GetView<HomeController> {
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   void _showMidiDevicesDialog(BuildContext context) {
     Get.dialog(
@@ -1221,6 +1246,7 @@ class HomeView extends GetView<HomeController> {
     int index,
     Pad pad,
     String fileName,
+    BuildContext context,
   ) {
     double? progress;
     if (hasFile) {
@@ -1236,9 +1262,9 @@ class HomeView extends GetView<HomeController> {
     final isPaused = hasFile && controller.audioService.isPaused(pad.path!);
 
     // Blend base color towards white when playing for a clear visual change.
-    final baseColor = color.withOpacity(hasFile ? 1 : 0.4);
-    final playingColor = Color.fromARGB(255, 3, 165, 0); // Light Blue 300
-    final bgColor = isPlaying ? playingColor.withOpacity(0.95) : baseColor;
+    final baseColor = color.withValues(alpha: hasFile ? 1 : 0.4);
+    final playingColor = const Color.fromARGB(255, 3, 165, 0); // Light Blue 300
+    final bgColor = isPlaying ? playingColor.withValues(alpha: 0.95) : baseColor;
 
     // Timer text
     String timerText = '';
@@ -1249,9 +1275,7 @@ class HomeView extends GetView<HomeController> {
     }
 
     // --- Waveform Data ---
-    final waveform = hasFile
-        ? controller.audioService.getWaveform(pad.path!)
-        : null;
+    final waveform = hasFile ? controller.audioService.getWaveform(pad.path!) : null;
     if (hasFile && waveform == null) {
       controller.audioService.loadWaveform(pad.path!);
     }
@@ -1261,9 +1285,18 @@ class HomeView extends GetView<HomeController> {
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        // Tap handling is now in parent GestureDetector based on Edit Mode
-        onTap: null,
-        onLongPress: null,
+        onTap: () {
+          controller.focusNode.requestFocus();
+          if (hasFile) controller.playPad(index);
+        },
+        onLongPress: () {
+          controller.focusNode.requestFocus();
+          controller.assignFileToPad(index);
+        },
+        onSecondaryTapUp: (details) {
+          controller.focusNode.requestFocus();
+          _showPadOptions(context, index, details.globalPosition);
+        },
         child: Stack(
           children: [
             // Waveform Background
@@ -1284,7 +1317,7 @@ class HomeView extends GetView<HomeController> {
                       child: CustomPaint(
                         painter: WaveformPainter(
                           data: currentWave,
-                          color: Colors.white.withOpacity(0.2),
+                          color: Colors.white.withValues(alpha: 0.2),
                           progress: progress ?? 0.0,
                         ),
                       ),
@@ -1363,7 +1396,7 @@ class HomeView extends GetView<HomeController> {
                             ),
                             margin: const EdgeInsets.only(right: 4),
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.2),
+                              color: Colors.white.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: Text(
@@ -1381,7 +1414,7 @@ class HomeView extends GetView<HomeController> {
                             child: Icon(
                               Icons.router,
                               size: 14,
-                              color: Colors.white.withOpacity(0.6),
+                              color: Colors.white.withValues(alpha: 0.6),
                             ),
                           ),
                       ],
@@ -1396,7 +1429,7 @@ class HomeView extends GetView<HomeController> {
                 !hasFile
                     ? Icons.add
                     : (isPlaying && !isPaused ? Icons.pause : Icons.play_arrow),
-                color: Colors.white.withOpacity(0.8),
+                color: Colors.white.withValues(alpha: 0.8),
                 size: 48,
               ),
             ),
@@ -1443,7 +1476,7 @@ class HomeView extends GetView<HomeController> {
                           activeTrackColor: Colors.white,
                           inactiveTrackColor: Colors.white24,
                           thumbColor: Colors.white,
-                          overlayColor: Colors.white.withOpacity(0.2),
+                          overlayColor: Colors.white.withValues(alpha: 0.2),
                         ),
                         child: Slider(
                           value: (progress ?? 0.0).clamp(0.0, 1.0),
@@ -1535,7 +1568,7 @@ class HomeView extends GetView<HomeController> {
                             color:
                                 controller.pads[index].keyboardShortcut != null
                                 ? Colors.white
-                                : Colors.white.withOpacity(0.4),
+                                : Colors.white.withValues(alpha: 0.4),
                           ),
                         ),
                       ),
@@ -1553,7 +1586,7 @@ class HomeView extends GetView<HomeController> {
                             size: 20,
                             color: controller.pads[index].isLooping
                                 ? Colors.white
-                                : Colors.white.withOpacity(0.4),
+                                : Colors.white.withValues(alpha: 0.4),
                           ),
                         ),
                       ),
@@ -1594,7 +1627,7 @@ class HomeView extends GetView<HomeController> {
                           child: Icon(
                             Icons.delete_outline,
                             size: 20,
-                            color: Colors.white.withOpacity(0.6),
+                            color: Colors.white.withValues(alpha: 0.6),
                           ),
                         ),
                       ),
@@ -1707,8 +1740,7 @@ class HomeView extends GetView<HomeController> {
   }
 }
 
-// A lightweight master-level meter that attempts to read levels from audioService.
-// Falls back to a subtle animated approximation when any pad is playing.
+// A production-quality master meter with fader
 class _MasterAudioMeter extends StatefulWidget {
   final HomeController controller;
   const _MasterAudioMeter({required this.controller});
@@ -1718,14 +1750,21 @@ class _MasterAudioMeter extends StatefulWidget {
 }
 
 class _MasterAudioMeterState extends State<_MasterAudioMeter> {
+  // We use a timer for smooth decay animation of the meter bars
   Timer? _timer;
-  double _levelL = 0.0, _levelR = 0.0;
-  double _peakL = 0.0, _peakR = 0.0;
+  double _displayedL = 0.0;
+  double _displayedR = 0.0;
+  double _peakHoldL = 0.0;
+  double _peakHoldR = 0.0;
+  
+  // For peak hold reset
+  int _peakHoldCounter = 0;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(const Duration(milliseconds: 50), (_) => _tick());
+    // 60 FPS animation loop for smooth meter decay
+    _timer = Timer.periodic(const Duration(milliseconds: 16), (_) => _tick());
   }
 
   @override
@@ -1735,196 +1774,159 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
   }
 
   void _tick() {
-    final levels = _readLevels();
-    final newL = levels.$1.clamp(0.0, 1.0);
-    final newR = levels.$2.clamp(0.0, 1.0);
+    // Read current instantaneous peaks from service
+    final svc = widget.controller.audioService;
+    // We use peak values for the main bar as they are safer for digital clipping detection
+    // RMS could be an inner darker bar if desired, but let's stick to Peak for main visibility.
+    final targetL = svc.masterPeakL.value; 
+    final targetR = svc.masterPeakR.value;
 
-    // Attack fast, decay slow
-    const decay = 0.85;
-    final nextL = newL > _levelL ? newL : _levelL * decay;
-    final nextR = newR > _levelR ? newR : _levelR * decay;
+    // Decay settings
+    const decayFactor = 0.85; // How fast the bar drops
+    const riseFactor = 1.0;   // Instant rise
 
-    // Peak-hold decay
-    final nextPeakL = math.max(newL, _peakL - 0.02);
-    final nextPeakR = math.max(newR, _peakR - 0.02);
-
-    if (!mounted) return;
-    setState(() {
-      _levelL = nextL;
-      _levelR = nextR;
-      _peakL = nextPeakL;
-      _peakR = nextPeakR;
-    });
-  }
-
-  // Try a few common shapes that an audio service might expose.
-  (double, double) _readLevels() {
-    final svc = widget.controller.audioService as dynamic;
-    double l = 0.0, r = 0.0;
-
-    // Try getMasterLevels(): [l, r] or {left/right}
-    try {
-      final fn = (svc.getMasterLevels as Function);
-      final res = fn();
-      if (res is List && res.isNotEmpty) {
-        l = _numToDouble(res[0]);
-        r = _numToDouble(res.length > 1 ? res[1] : res[0]);
-        return (l, r);
-      } else if (res is Map) {
-        l = _numToDouble(res['left'] ?? res['l'] ?? res['L']);
-        r = _numToDouble(res['right'] ?? res['r'] ?? res['R'] ?? l);
-        return (l, r);
-      }
-    } catch (_) {
-      // ignore
+    // Apply ballistics
+    if (targetL >= _displayedL) {
+      _displayedL = _displayedL + (targetL - _displayedL) * riseFactor;
+    } else {
+      _displayedL *= decayFactor;
     }
 
-    // Try fields masterRmsL/masterRmsR or masterPeakL/masterPeakR
-    try {
-      l = _numToDouble(svc.masterRmsL ?? svc.masterPeakL ?? svc.masterLevel);
-      r = _numToDouble(
-        svc.masterRmsR ?? svc.masterPeakR ?? svc.masterLevel ?? l,
-      );
-      if (l > 0 || r > 0) return (l, r);
-    } catch (_) {
-      // ignore
+    if (targetR >= _displayedR) {
+      _displayedR = _displayedR + (targetR - _displayedR) * riseFactor;
+    } else {
+      _displayedR *= decayFactor;
     }
 
-    // Try getMasterLevel(): mono
-    try {
-      final fn = (svc.getMasterLevel as Function);
-      final m = _numToDouble(fn());
-      if (m > 0) return (m, m);
-    } catch (_) {
-      // ignore
+    // Peak Hold logic (drops slowly after a hold time)
+    if (_displayedL > _peakHoldL) {
+      _peakHoldL = _displayedL;
+      _peakHoldCounter = 0;
+    }
+    if (_displayedR > _peakHoldR) {
+      _peakHoldR = _displayedR;
+      _peakHoldCounter = 0;
     }
 
-    // Fallback: If anything is playing, show a subtle animated approximation.
-    final anyPlaying = _anyPadPlaying();
-    if (!anyPlaying) return (0.0, 0.0);
+    _peakHoldCounter++;
+    if (_peakHoldCounter > 60) { // Hold for ~1 sec
+      _peakHoldL *= 0.95;
+      _peakHoldR *= 0.95;
+    }
+    
+    // Clamp
+    if (_displayedL < 0.001) _displayedL = 0;
+    if (_displayedR < 0.001) _displayedR = 0;
 
-    final t = DateTime.now().millisecondsSinceEpoch / 1000.0;
-    final approxL = 0.35 + 0.25 * (0.5 + 0.5 * math.sin(t * 7.0));
-    final approxR = 0.35 + 0.25 * (0.5 + 0.5 * math.sin(t * 8.2 + 1.3));
-    return (approxL, approxR);
-  }
-
-  bool _anyPadPlaying() {
-    try {
-      for (final Pad p in widget.controller.pads) {
-        final path = p.path;
-        if (path != null && widget.controller.audioService.isPlaying(path)) {
-          return true;
-        }
-      }
-    } catch (_) {}
-    return false;
-  }
-
-  double _numToDouble(dynamic v) => v is num ? v.toDouble() : 0.0;
-
-  Color _meterColor(double x, ColorScheme scheme) {
-    if (x < 0.7) return Colors.greenAccent.shade400;
-    if (x < 0.9) return Colors.orangeAccent.shade400;
-    return Colors.redAccent.shade400;
-  }
-
-  Widget _buildBar(double level, double peak, ColorScheme scheme) {
-    return LayoutBuilder(
-      builder: (_, c) {
-        final h = c.maxHeight;
-        final w = c.maxWidth;
-        final fillH = h * level.clamp(0.0, 1.0);
-        final peakY = h * (1.0 - peak.clamp(0.0, 1.0));
-
-        return Stack(
-          children: [
-            // Track
-            Container(
-              width: w,
-              decoration: BoxDecoration(
-                color: scheme.surfaceVariant.withOpacity(0.55),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: scheme.outlineVariant.withOpacity(0.6),
-                  width: 1,
-                ),
-              ),
-            ),
-            // Fill
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 40),
-                width: w,
-                height: fillH,
-                decoration: BoxDecoration(
-                  color: _meterColor(level, scheme),
-                  borderRadius: const BorderRadius.vertical(
-                    bottom: Radius.circular(6),
-                  ),
-                ),
-              ),
-            ),
-            // Peak hold line
-            Positioned(
-              left: 0,
-              right: 0,
-              top: peakY - 1,
-              height: 2,
-              child: Container(color: scheme.onSurface.withOpacity(0.8)),
-            ),
-          ],
-        );
-      },
-    );
+    if (mounted) setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      width: 80,
-      margin: const EdgeInsets.only(right: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+      width: 130, // Wider to accommodate fader
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: scheme.surface.withOpacity(0.9),
-        border: Border.all(color: scheme.outlineVariant.withOpacity(0.6)),
+        color: scheme.surface, // Use theme surface color
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
       ),
       child: Column(
         children: [
-          Text(
-            'Master',
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: scheme.onSurface.withOpacity(0.85),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(child: _buildBar(_levelL, _peakL, scheme)),
-                const SizedBox(width: 6),
-                Expanded(child: _buildBar(_levelR, _peakR, scheme)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 6),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'L',
-                style: TextStyle(color: scheme.onSurface.withOpacity(0.7)),
+                'MASTER',
+                style: TextStyle(
+                  color: scheme.onSurface.withValues(alpha: 0.7),
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.0,
+                ),
               ),
-              Text(
-                'R',
-                style: TextStyle(color: scheme.onSurface.withOpacity(0.7)),
-              ),
+               // Numerical readout of volume
+               Obx(() => Text(
+                 '${(widget.controller.audioService.masterVolume.value * 100).toInt()}%',
+                 style: TextStyle(
+                   color: scheme.onSurface, 
+                   fontSize: 10, 
+                   fontFamily: "Courier",
+                   fontWeight: FontWeight.bold,
+                 ),
+               )),
             ],
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Fader Section
+                SizedBox(
+                  width: 32,
+                  child: RotatedBox(
+                    quarterTurns: 3,
+                    child: Obx(() {
+                      return SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          trackHeight: 6,
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 10,
+                            elevation: 2,
+                          ),
+                          overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+                          activeTrackColor: scheme.primary,
+                          inactiveTrackColor: scheme.surfaceContainerHighest,
+                          thumbColor: scheme.primary,
+                        ),
+                        child: Slider(
+                          value: widget.controller.audioService.masterVolume.value,
+                          onChanged: (val) {
+                            widget.controller.audioService.setMasterVolume(val);
+                          },
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                // Meters Section
+                Expanded(
+                  child: Row(
+                    children: [
+                      // Left Meter
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Expanded(
+                              child: _LEDMeterBar(level: _displayedL, peak: _peakHoldL),
+                            ),
+                            const SizedBox(height: 4),
+                            Text("L", style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 9, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      // Right Meter
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Expanded(
+                              child: _LEDMeterBar(level: _displayedR, peak: _peakHoldR),
+                            ),
+                            const SizedBox(height: 4),
+                            Text("R", style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 9, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -1932,6 +1934,91 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
   }
 }
 
+class _LEDMeterBar extends StatelessWidget {
+  final double level;
+  final double peak;
+
+  const _LEDMeterBar({required this.level, required this.peak});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Segmented look
+    return LayoutBuilder(
+      builder: (ctx, constraints) {
+        final maxH = constraints.maxHeight;
+        
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: Stack(
+            alignment: Alignment.bottomCenter,
+            children: [
+              // Background Track
+              Container(
+                width: double.infinity,
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+              ),
+              
+              // Draw gradient/segments
+              Container(
+                height: maxH * level.clamp(0.0, 1.0),
+                width: double.infinity,
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      Color(0xFF43A047), // Darker green for light UI
+                      Color(0xFFFBC02D), // Darker amber
+                      Color(0xFFE53935), // Darker red
+                    ],
+                    stops: [0.6, 0.85, 1.0],
+                    tileMode: TileMode.clamp,
+                  ),
+                ),
+              ),
+
+              // Peak Hold Indicator
+              if (peak > 0.01)
+                Positioned(
+                  bottom: maxH * peak.clamp(0.0, 1.0) - 1,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    height: 2,
+                    decoration: BoxDecoration(
+                      color: scheme.onSurface,
+                      boxShadow: [
+                        BoxShadow(color: scheme.onSurface.withValues(alpha: 0.3), blurRadius: 2),
+                      ],
+                    ),
+                  ),
+                ),
+                
+              // Grid lines overlay for "segments" feel
+              Column(
+                children: List.generate(12, (index) => Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(
+                          color: scheme.surface.withValues(alpha: 0.8), 
+                          width: 1.5
+                        ),
+                      ),
+                    ),
+                  ),
+                )),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// WaveformPainter kept as is...
 class WaveformPainter extends CustomPainter {
   final List<double> data;
   final Color color;
@@ -1952,7 +2039,7 @@ class WaveformPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
 
     final playedPaint = Paint()
-      ..color = color.withOpacity(0.9)
+      ..color = color.withValues(alpha: 0.9)
       ..style = PaintingStyle.fill;
 
     // Draw background/unplayed waveform

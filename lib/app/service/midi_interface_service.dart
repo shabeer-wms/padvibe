@@ -1,3 +1,4 @@
+import "package:flutter/foundation.dart";
 import 'dart:async';
 import 'dart:convert';
 import 'package:get/get.dart';
@@ -62,12 +63,12 @@ class MidiInterfaceService extends GetxService {
   }
 
   void refreshDevices() {
-    print('Refreshing MIDI devices via Sidecar...');
+    debugPrint('Refreshing MIDI devices via Sidecar...');
     _sidecar.send(jsonEncode({'command': 'list_devices'}));
   }
 
   void connect(MidiDevice device) {
-    print('Connecting to device: ${device.name}');
+    debugPrint('Connecting to device: ${device.name}');
     _sidecar.send(
       jsonEncode({'command': 'connect_device', 'device_name': device.name}),
     );
@@ -86,7 +87,7 @@ class MidiInterfaceService extends GetxService {
           .map((name) => MidiDevice(name, name, 'native', false))
           .toList(),
     );
-    print('MIDI Devices found: ${devices.length}');
+    debugPrint('MIDI Devices found: ${devices.length}');
   }
 
   void _handleMidiMessage(Map<String, dynamic> data) {

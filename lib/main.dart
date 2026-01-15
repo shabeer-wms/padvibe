@@ -1,15 +1,24 @@
-import 'package:PadVibe/app/service/audio_engine_service.dart';
-import 'package:PadVibe/app/service/audio_player_service.dart';
-import 'package:PadVibe/app/service/local_api_service.dart';
-import 'package:PadVibe/app/service/midi_interface_service.dart';
-import 'package:PadVibe/app/service/sidecar_service.dart';
-import 'package:PadVibe/app/service/storage_service.dart';
+import 'package:padvibe/app/service/audio_engine_service.dart';
+import 'package:padvibe/app/service/audio_player_service.dart';
+import 'package:padvibe/app/service/local_api_service.dart';
+import 'package:padvibe/app/service/midi_interface_service.dart';
+import 'package:padvibe/app/service/sidecar_service.dart';
+import 'package:padvibe/app/service/storage_service.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:flutter_single_instance/flutter_single_instance.dart';
+import 'dart:io';
 import 'app/routes/app_pages.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Only allow one instance
+  final isFirstInstance = await FlutterSingleInstance().isFirstInstance();
+  if (!isFirstInstance) {
+    await FlutterSingleInstance().focus();
+    exit(0);
+  }
 
   // Initialize services in order of dependency
   await Get.putAsync(() => StorageService().init());
@@ -22,7 +31,7 @@ Future<void> main() async {
   runApp(
     GetMaterialApp(
       title: "PadVibe",
-      initialRoute: AppPages.INITIAL,
+      initialRoute: AppPages.initial,
       getPages: AppPages.routes,
       debugShowCheckedModeBanner: false,
     ),

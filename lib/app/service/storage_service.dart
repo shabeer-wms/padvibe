@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:PadVibe/app/data/pad_model.dart';
+import 'package:padvibe/app/data/pad_model.dart';
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
@@ -204,6 +204,15 @@ class StorageService extends GetxService {
   Future<int?> getWebhookInterval() async {
     final data = await _loadRawData();
     return data?['webhookIntervalMs'] as int?;
+  }
+
+  Future<void> saveGridColumns(int columns) async {
+    await _updateSettings({'gridColumns': columns});
+  }
+
+  Future<int?> getGridColumns() async {
+    final data = await _loadRawData();
+    return data?['gridColumns'] as int?;
   }
 
   Future<void> clear() async {
