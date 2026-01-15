@@ -80,7 +80,7 @@ padvibe/
 ### Installation
 1.  **Clone the repo:**
     ```bash
-    git clone https://github.com/your-repo/padvibe.git
+    git clone https://github.com/shabeer-wms/padvibe.git
     cd padvibe
     ```
 2.  **Install Python dependencies:**
