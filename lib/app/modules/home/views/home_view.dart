@@ -1,13 +1,12 @@
 import 'dart:math' as math;
 import 'dart:async'; // added
-import 'dart:ui'; // for FontFeature
-import 'package:PadVibe/app/data/pad_model.dart';
+import 'package:padvibe/app/data/pad_model.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
-import 'package:PadVibe/app/service/midi_interface_service.dart'; // updated
+import 'package:padvibe/app/service/midi_interface_service.dart'; // updated
 import '../controllers/home_controller.dart';
 
 class HomeView extends GetView<HomeController> {
@@ -105,12 +104,12 @@ class HomeView extends GetView<HomeController> {
                         decoration: BoxDecoration(
                           color: Theme.of(
                             ctx,
-                          ).colorScheme.surface.withOpacity(0.98),
+                          ).colorScheme.surface.withValues(alpha: 0.98),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
                             color: Theme.of(
                               ctx,
-                            ).colorScheme.primary.withOpacity(0.35),
+                            ).colorScheme.primary.withValues(alpha: 0.35),
                           ),
                           boxShadow: const [
                             BoxShadow(
@@ -139,8 +138,8 @@ class HomeView extends GetView<HomeController> {
                                   style: TextStyle(
                                     fontSize: fontSize,
                                     fontWeight: FontWeight.w700,
-                                    color: accent.withOpacity(
-                                      blinking ? 1.0 : 0.45,
+                                    color: accent.withValues(
+                                      alpha: blinking ? 1.0 : 0.45,
                                     ),
                                     fontFeatures: const [
                                       FontFeature.tabularFigures(),
@@ -193,7 +192,7 @@ class HomeView extends GetView<HomeController> {
                                       size: 16,
                                       color: Theme.of(
                                         ctx,
-                                      ).colorScheme.onSurface.withOpacity(0.6),
+                                      ).colorScheme.onSurface.withValues(alpha: 0.6),
                                     ),
                                   ),
                                 ),
@@ -282,20 +281,20 @@ class HomeView extends GetView<HomeController> {
             Expanded(
               child: Column(
                 children: [
+                  _buildTabs(context),
                   Expanded(
                     child: Obx(() {
                       // Read the ticker to trigger rebuilds for progress bars.
-                      final _ = controller.remainingSeconds.value;
+                      controller.remainingSeconds.value;
                       // Also observe active handles for immediate play/pause updates
-                      final __ = controller.audioService.activeHandles.length;
+                      controller.audioService.activeHandles.length;
                       // Also observe manual force updates (e.g. seeking while paused)
-                      final ___ = controller.forceUpdate.value;
+                      controller.forceUpdate.value;
                       return Padding(
                         padding: const EdgeInsets.all(12),
                         child: LayoutBuilder(
                           builder: (context, constraints) {
                             return Obx(() {
-                              final width = constraints.maxWidth;
                               const spacing = 12.0;
                               final cols = controller.gridColumns.value;
                               final childAspect = 4 / 3;
@@ -415,6 +414,11 @@ class HomeView extends GetView<HomeController> {
       title: const Text('PadVibe'),
       centerTitle: false,
       actions: [
+        IconButton(
+          tooltip: 'Toggle Timer Overlay',
+          icon: const Icon(Icons.timer),
+          onPressed: () => _toggleTimerOverlay(context),
+        ),
         // Grid Size Selector
         Obx(
           () => DropdownButton<int>(
@@ -597,7 +601,11 @@ class HomeView extends GetView<HomeController> {
             // Slight delay to allow menu to close before showing dialog/popover
             Future.delayed(
               const Duration(milliseconds: 100),
-              () => _showRenameTabPopover(context, index, position),
+              () {
+                if (context.mounted) {
+                  _showRenameTabPopover(context, index, position);
+                }
+              },
             );
           },
         ),
@@ -612,7 +620,11 @@ class HomeView extends GetView<HomeController> {
           onTap: () {
             Future.delayed(
               const Duration(milliseconds: 100),
-              () => _showDeleteTabConfirmation(context, index),
+              () {
+                if (context.mounted) {
+                  _showDeleteTabConfirmation(context, index);
+                }
+              },
             );
           },
         ),
@@ -1236,9 +1248,9 @@ class HomeView extends GetView<HomeController> {
     final isPaused = hasFile && controller.audioService.isPaused(pad.path!);
 
     // Blend base color towards white when playing for a clear visual change.
-    final baseColor = color.withOpacity(hasFile ? 1 : 0.4);
+    final baseColor = color.withValues(alpha: hasFile ? 1 : 0.4);
     final playingColor = Color.fromARGB(255, 3, 165, 0); // Light Blue 300
-    final bgColor = isPlaying ? playingColor.withOpacity(0.95) : baseColor;
+    final bgColor = isPlaying ? playingColor.withValues(alpha: 0.95) : baseColor;
 
     // Timer text
     String timerText = '';
@@ -1284,7 +1296,7 @@ class HomeView extends GetView<HomeController> {
                       child: CustomPaint(
                         painter: WaveformPainter(
                           data: currentWave,
-                          color: Colors.white.withOpacity(0.2),
+                          color: Colors.white.withValues(alpha: 0.2),
                           progress: progress ?? 0.0,
                         ),
                       ),
@@ -1363,7 +1375,7 @@ class HomeView extends GetView<HomeController> {
                             ),
                             margin: const EdgeInsets.only(right: 4),
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.2),
+                              color: Colors.white.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: Text(
@@ -1381,7 +1393,7 @@ class HomeView extends GetView<HomeController> {
                             child: Icon(
                               Icons.router,
                               size: 14,
-                              color: Colors.white.withOpacity(0.6),
+                              color: Colors.white.withValues(alpha: 0.6),
                             ),
                           ),
                       ],
@@ -1396,7 +1408,7 @@ class HomeView extends GetView<HomeController> {
                 !hasFile
                     ? Icons.add
                     : (isPlaying && !isPaused ? Icons.pause : Icons.play_arrow),
-                color: Colors.white.withOpacity(0.8),
+                color: Colors.white.withValues(alpha: 0.8),
                 size: 48,
               ),
             ),
@@ -1443,7 +1455,7 @@ class HomeView extends GetView<HomeController> {
                           activeTrackColor: Colors.white,
                           inactiveTrackColor: Colors.white24,
                           thumbColor: Colors.white,
-                          overlayColor: Colors.white.withOpacity(0.2),
+                          overlayColor: Colors.white.withValues(alpha: 0.2),
                         ),
                         child: Slider(
                           value: (progress ?? 0.0).clamp(0.0, 1.0),
@@ -1535,7 +1547,7 @@ class HomeView extends GetView<HomeController> {
                             color:
                                 controller.pads[index].keyboardShortcut != null
                                 ? Colors.white
-                                : Colors.white.withOpacity(0.4),
+                                : Colors.white.withValues(alpha: 0.4),
                           ),
                         ),
                       ),
@@ -1553,7 +1565,7 @@ class HomeView extends GetView<HomeController> {
                             size: 20,
                             color: controller.pads[index].isLooping
                                 ? Colors.white
-                                : Colors.white.withOpacity(0.4),
+                                : Colors.white.withValues(alpha: 0.4),
                           ),
                         ),
                       ),
@@ -1594,7 +1606,7 @@ class HomeView extends GetView<HomeController> {
                           child: Icon(
                             Icons.delete_outline,
                             size: 20,
-                            color: Colors.white.withOpacity(0.6),
+                            color: Colors.white.withValues(alpha: 0.6),
                           ),
                         ),
                       ),
@@ -1843,10 +1855,10 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
             Container(
               width: w,
               decoration: BoxDecoration(
-                color: scheme.surfaceVariant.withOpacity(0.55),
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
-                  color: scheme.outlineVariant.withOpacity(0.6),
+                  color: scheme.outlineVariant.withValues(alpha: 0.6),
                   width: 1,
                 ),
               ),
@@ -1872,7 +1884,7 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
               right: 0,
               top: peakY - 1,
               height: 2,
-              child: Container(color: scheme.onSurface.withOpacity(0.8)),
+              child: Container(color: scheme.onSurface.withValues(alpha: 0.8)),
             ),
           ],
         );
@@ -1888,8 +1900,8 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
       margin: const EdgeInsets.only(right: 8),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
       decoration: BoxDecoration(
-        color: scheme.surface.withOpacity(0.9),
-        border: Border.all(color: scheme.outlineVariant.withOpacity(0.6)),
+        color: scheme.surface.withValues(alpha: 0.9),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.6)),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -1898,7 +1910,7 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
             'Master',
             style: TextStyle(
               fontWeight: FontWeight.w600,
-              color: scheme.onSurface.withOpacity(0.85),
+              color: scheme.onSurface.withValues(alpha: 0.85),
             ),
           ),
           const SizedBox(height: 8),
@@ -1918,11 +1930,11 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
             children: [
               Text(
                 'L',
-                style: TextStyle(color: scheme.onSurface.withOpacity(0.7)),
+                style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.7)),
               ),
               Text(
                 'R',
-                style: TextStyle(color: scheme.onSurface.withOpacity(0.7)),
+                style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.7)),
               ),
             ],
           ),
@@ -1952,7 +1964,7 @@ class WaveformPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
 
     final playedPaint = Paint()
-      ..color = color.withOpacity(0.9)
+      ..color = color.withValues(alpha: 0.9)
       ..style = PaintingStyle.fill;
 
     // Draw background/unplayed waveform

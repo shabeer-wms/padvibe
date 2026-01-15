@@ -1,3 +1,4 @@
+import "package:flutter/foundation.dart";
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -73,14 +74,14 @@ class SidecarService extends GetxService {
   }
 
   Future<void> _startPythonSidecar() async {
-    print('Starting Python Sidecar...');
+    debugPrint('Starting Python Sidecar...');
     initStatusText.value = 'Cleaning up previous processes...';
     sidecarStatus.value = 'Starting';
     lastError.value = '';
 
     // Kill any process using port 8765
     try {
-      print('Checking for processes using port 8765...');
+      debugPrint('Checking for processes using port 8765...');
       if (Platform.isMacOS || Platform.isLinux) {
         final result = await Process.run('lsof', ['-t', '-i:8765']);
         final output = result.stdout.toString().trim();
@@ -88,7 +89,7 @@ class SidecarService extends GetxService {
           final pids = output.split('\n');
           for (final pid in pids) {
             if (pid.isNotEmpty) {
-              print('Killing process $pid using port 8765');
+              debugPrint('Killing process $pid using port 8765');
               initStatusText.value = 'Terminating stale process $pid...';
               await Process.run('kill', ['-9', pid]);
             }
@@ -97,7 +98,7 @@ class SidecarService extends GetxService {
         }
       }
     } catch (e) {
-      print('Error cleaning up port 8765: $e');
+      debugPrint('Error cleaning up port 8765: $e');
     }
 
     initStatusText.value = 'Locating Sidecar binary...';
@@ -113,7 +114,7 @@ class SidecarService extends GetxService {
       }
 
       if (await File(executablePath).exists()) {
-        print('Found sidecar binary at $executablePath');
+        debugPrint('Found sidecar binary at $executablePath');
         initStatusText.value = 'Starting Sidecar binary...';
         if (Platform.isMacOS || Platform.isLinux) {
           await Process.run('chmod', ['+x', executablePath]);
@@ -124,7 +125,7 @@ class SidecarService extends GetxService {
           runInShell: false,
         );
       } else {
-        print('Sidecar binary not found. Trying python script fallback...');
+        debugPrint('Sidecar binary not found. Trying python script fallback...');
         initStatusText.value = 'Starting Python Sidecar engine...';
         _pythonProcess = await Process.start('python3', [
           'sidecar/midi_server.py',
@@ -133,16 +134,16 @@ class SidecarService extends GetxService {
 
       if (_pythonProcess != null) {
         sidecarPid.value = _pythonProcess!.pid;
-        print('Sidecar process started with PID: ${_pythonProcess!.pid}');
+        debugPrint('Sidecar process started with PID: ${_pythonProcess!.pid}');
         _startHealthCheck();
       }
 
       _pythonProcess?.stdout.transform(utf8.decoder).listen((data) {
-        print('SIDECAR OUT: $data');
+        debugPrint('SIDECAR OUT: $data');
       });
 
       _pythonProcess?.stderr.transform(utf8.decoder).listen((data) {
-        print('SIDECAR ERR: $data');
+        debugPrint('SIDECAR ERR: $data');
         if (data.contains('ERROR') || data.contains('Error')) {
           lastError.value = data.trim();
         }
@@ -152,7 +153,7 @@ class SidecarService extends GetxService {
       await Future.delayed(const Duration(seconds: 3));
       _connectToWebSocket(retries: 10);
     } catch (e) {
-      print('Error starting Python sidecar: $e');
+      debugPrint('Error starting Python sidecar: $e');
       sidecarStatus.value = 'Error';
       initStatusText.value = 'Initialization Error: ${e.toString()}';
       lastError.value = e.toString();
@@ -164,7 +165,7 @@ class SidecarService extends GetxService {
   }
 
   void _stopPythonSidecar() {
-    print('Stopping Python Sidecar...');
+    debugPrint('Stopping Python Sidecar...');
     sidecarStatus.value = 'Stopped';
     shutdownSidecar();
     Future.delayed(const Duration(milliseconds: 100), () {
@@ -173,7 +174,7 @@ class SidecarService extends GetxService {
   }
 
   Future<void> _connectToWebSocket({int retries = 5}) async {
-    print('Connecting to WebSocket (Attempts left: $retries)...');
+    debugPrint('Connecting to WebSocket (Attempts left: $retries)...');
     initStatusText.value = 'Establishing WebSocket connection...';
     wsConnectionStatus.value = 'Connecting';
 
@@ -192,12 +193,12 @@ class SidecarService extends GetxService {
           _handleWebSocketMessage(message);
         },
         onDone: () {
-          print('WebSocket connection closed');
+          debugPrint('WebSocket connection closed');
           _isServerReady = false;
           wsConnectionStatus.value = 'Disconnected';
         },
         onError: (error) {
-          print('WebSocket error: $error');
+          debugPrint('WebSocket error: $error');
           _isServerReady = false;
           wsConnectionStatus.value = 'Error';
           lastError.value = error.toString();
@@ -217,7 +218,7 @@ class SidecarService extends GetxService {
 
             initStatusText.value = 'WebSocket Connected. Starting engines...';
 
-            print('WebSocket connected!');
+            debugPrint('WebSocket connected!');
 
             
 
@@ -236,7 +237,7 @@ class SidecarService extends GetxService {
             
 
           } catch (e) {
-      print('Error connecting to WebSocket: $e');
+      debugPrint('Error connecting to WebSocket: $e');
       wsConnectionStatus.value = 'Error';
       lastError.value = e.toString();
       if (retries > 0) {
@@ -254,9 +255,9 @@ class SidecarService extends GetxService {
 
       // Global status handling
       if (type == 'status') {
-        print('Sidecar Status: ${data['message']}');
+        debugPrint('Sidecar Status: ${data['message']}');
       } else if (type == 'error') {
-        print('Sidecar Error: ${data['message']}');
+        debugPrint('Sidecar Error: ${data['message']}');
       }
 
       // Dispatch to handlers
@@ -266,7 +267,7 @@ class SidecarService extends GetxService {
         }
       }
     } catch (e) {
-      print('Error parsing WebSocket message: $e');
+      debugPrint('Error parsing WebSocket message: $e');
     }
   }
 
@@ -275,7 +276,7 @@ class SidecarService extends GetxService {
       try {
         _channel!.sink.add(message);
       } catch (e) {
-        print('Error sending message to WebSocket: $e');
+        debugPrint('Error sending message to WebSocket: $e');
         _isServerReady = false;
       }
     }

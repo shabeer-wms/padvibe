@@ -27,7 +27,7 @@ class SplashView extends GetView<SplashController> {
                   borderRadius: BorderRadius.circular(24),
                   boxShadow: [
                     BoxShadow(
-                      color: colorScheme.primary.withOpacity(0.2),
+                      color: colorScheme.primary.withValues(alpha: 0.2),
                       blurRadius: 20,
                       offset: const Offset(0, 10),
                     ),
@@ -64,7 +64,7 @@ class SplashView extends GetView<SplashController> {
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
               width: 400,
               decoration: BoxDecoration(
-                color: colorScheme.surfaceVariant.withOpacity(0.5),
+                color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: colorScheme.outlineVariant),
               ),

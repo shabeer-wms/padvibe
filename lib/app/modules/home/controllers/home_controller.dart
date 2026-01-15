@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:PadVibe/app/data/pad_model.dart';
-import 'package:PadVibe/app/service/audio_player_service.dart';
-import 'package:PadVibe/app/service/local_api_service.dart';
-import 'package:PadVibe/app/service/midi_interface_service.dart';
-import 'package:PadVibe/app/service/sidecar_service.dart';
-import 'package:PadVibe/app/service/storage_service.dart';
+import 'package:padvibe/app/data/pad_model.dart';
+import 'package:padvibe/app/service/audio_player_service.dart';
+import 'package:padvibe/app/service/local_api_service.dart';
+import 'package:padvibe/app/service/midi_interface_service.dart';
+import 'package:padvibe/app/service/sidecar_service.dart';
+import 'package:padvibe/app/service/storage_service.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -155,9 +155,9 @@ class HomeController extends GetxController {
       if (editingPadIndex.value != -1) return; // Ignore MIDI if editing name
 
       if (event.type == MidiEventType.noteOn) {
-        print('HomeController received MIDI Note On: ${event.note}');
+        debugPrint('HomeController received MIDI Note On: ${event.note}');
         final index = pads.indexWhere((p) => p.midiNote == event.note);
-        print('Matching pad index: $index');
+        debugPrint('Matching pad index: $index');
         if (index != -1) {
           playPad(index);
         }
@@ -581,11 +581,6 @@ class HomeController extends GetxController {
 
   Future<void> _saveGroups() async {
     await storage.savePadGroups(groups.toList());
-  }
-
-  @override
-  void onReady() {
-    super.onReady();
   }
 
   @override

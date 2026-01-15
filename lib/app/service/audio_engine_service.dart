@@ -1,3 +1,4 @@
+import "package:flutter/foundation.dart";
 import 'dart:async';
 import 'dart:convert';
 import 'package:get/get.dart';
@@ -66,7 +67,7 @@ class AudioEngineService extends GetxService {
   }
 
   void refreshAudioDevices() {
-    print('Refreshing Audio devices via Sidecar...');
+    debugPrint('Refreshing Audio devices via Sidecar...');
     _sidecar.send(jsonEncode({'command': 'list_audio_devices'}));
   }
 
@@ -176,7 +177,7 @@ class AudioEngineService extends GetxService {
           )
           .toList(),
     );
-    print('Audio Devices found: ${audioDevices.length}');
+    debugPrint('Audio Devices found: ${audioDevices.length}');
   }
 
   void _handleAudioEvent(Map<String, dynamic> data) {

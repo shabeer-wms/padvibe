@@ -1,10 +1,11 @@
+import "package:flutter/foundation.dart";
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:PadVibe/app/modules/home/controllers/home_controller.dart';
-import 'package:PadVibe/app/service/audio_player_service.dart';
-import 'package:PadVibe/app/service/storage_service.dart';
+import 'package:padvibe/app/modules/home/controllers/home_controller.dart';
+import 'package:padvibe/app/service/audio_player_service.dart';
+import 'package:padvibe/app/service/storage_service.dart';
 import 'package:get/get.dart' hide Response;
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -46,7 +47,7 @@ class LocalApiService extends GetxService {
         }
       }
     } catch (e) {
-      print('Error getting local IP: $e');
+      debugPrint('Error getting local IP: $e');
     }
   }
 
@@ -92,9 +93,9 @@ class LocalApiService extends GetxService {
       // Listen on any interface (0.0.0.0) or loopback?
       // 0.0.0.0 allows other devices on LAN to access it, which is often desired for "local API".
       _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, 9696);
-      print('Local API Server listening on port ${_server!.port}');
+      debugPrint('Local API Server listening on port ${_server!.port}');
     } catch (e) {
-      print('Failed to start Local API Server: $e');
+      debugPrint('Failed to start Local API Server: $e');
     }
   }
 
@@ -160,7 +161,7 @@ class LocalApiService extends GetxService {
     }
 
     try {
-      print('Sending webhook to $url...');
+      debugPrint('Sending webhook to $url...');
       final uri = Uri.parse(url);
       final json = _generateStateJson();
 
@@ -171,9 +172,9 @@ class LocalApiService extends GetxService {
             body: jsonEncode(json),
           )
           .timeout(const Duration(seconds: 2));
-      print('Webhook response: ${response.statusCode}');
+      debugPrint('Webhook response: ${response.statusCode}');
     } catch (e) {
-      print('Webhook failed: $e');
+      debugPrint('Webhook failed: $e');
     }
   }
 

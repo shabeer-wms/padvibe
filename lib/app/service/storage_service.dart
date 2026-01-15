@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:PadVibe/app/data/pad_model.dart';
+import 'package:padvibe/app/data/pad_model.dart';
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';

@@ -14,7 +14,7 @@ class SplashController extends GetxController {
       if (initialized) {
         // Wait a small bit to show "System Check Complete"
         Future.delayed(const Duration(seconds: 1), () {
-          Get.offAllNamed(Routes.HOME);
+          Get.offAllNamed(Routes.home);
         });
       }
     });
@@ -25,7 +25,7 @@ class SplashController extends GetxController {
     super.onReady();
     // If already initialized (e.g. hot reload), just go home
     if (sidecarService.isInitialized.value) {
-      Get.offAllNamed(Routes.HOME);
+      Get.offAllNamed(Routes.home);
     }
   }
 }
