@@ -85,20 +85,73 @@ class StorageService extends GetxService {
     return this;
   }
 
-  Future<void> savePads(List<Pad> pads) async {
+  Future<void> _updateSettings(Map<String, dynamic> newSettings) async {
     if (kIsWeb) return;
     final file = await _ensureFile();
-    final data = jsonEncode({'pads': pads.map((p) => p.toJson()).toList()});
-    await file.writeAsString(data);
+    Map<String, dynamic> data = {};
+
+    if (await file.exists()) {
+      final content = await file.readAsString();
+      if (content.isNotEmpty) {
+        try {
+          data = jsonDecode(content) as Map<String, dynamic>;
+        } catch (_) {}
+      }
+    }
+
+    data.addAll(newSettings);
+    await file.writeAsString(jsonEncode(data));
+  }
+
+  Future<void> savePads(List<Pad> pads) async {
+    await _updateSettings({'pads': pads.map((p) => p.toJson()).toList()});
+  }
+
+  Future<void> savePadGroups(List<PadGroup> groups) async {
+    await _updateSettings({'groups': groups.map((g) => g.toJson()).toList()});
+  }
+
+  Future<void> saveSelectedAudioDevice(int deviceId, String deviceName) async {
+    await _updateSettings({
+      'selectedAudioDeviceId': deviceId,
+      'selectedAudioDeviceName': deviceName,
+    });
+  }
+
+  Future<int?> getSavedAudioDeviceId() async {
+    final data = await _loadRawData();
+    return data?['selectedAudioDeviceId'] as int?;
+  }
+
+  Future<String?> getSavedAudioDeviceName() async {
+    final data = await _loadRawData();
+    return data?['selectedAudioDeviceName'] as String?;
+  }
+
+  Future<void> saveRemoteEndpointUrl(String url) async {
+    await _updateSettings({'remoteEndpointUrl': url});
+  }
+
+  Future<void> saveWebhookInterval(int intervalMs) async {
+    await _updateSettings({'webhookIntervalMs': intervalMs});
+  }
+
+  Future<Map<String, dynamic>?> _loadRawData() async {
+    if (kIsWeb) return null;
+    final file = await _ensureFile();
+    if (!await file.exists()) return null;
+    final content = await file.readAsString();
+    if (content.isEmpty) return null;
+    try {
+      return jsonDecode(content) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<List<Pad>> loadPads({int? ensureCount}) async {
-    if (kIsWeb) return [];
-    final file = await _ensureFile();
-    if (!await file.exists()) return [];
-    final content = await file.readAsString();
-    if (content.isEmpty) return [];
-    final jsonMap = jsonDecode(content) as Map<String, dynamic>;
+    final jsonMap = await _loadRawData();
+    if (jsonMap == null) return [];
     final list = (jsonMap['pads'] as List? ?? []);
     final loaded = list
         .map((e) => Pad.fromJson(Map<String, dynamic>.from(e as Map)))
@@ -111,20 +164,9 @@ class StorageService extends GetxService {
     return loaded;
   }
 
-  Future<void> savePadGroups(List<PadGroup> groups) async {
-    if (kIsWeb) return;
-    final file = await _ensureFile();
-    final data = jsonEncode({'groups': groups.map((g) => g.toJson()).toList()});
-    await file.writeAsString(data);
-  }
-
   Future<List<PadGroup>> loadPadGroups() async {
-    if (kIsWeb) return [];
-    final file = await _ensureFile();
-    if (!await file.exists()) return [];
-    final content = await file.readAsString();
-    if (content.isEmpty) return [];
-    final jsonMap = jsonDecode(content) as Map<String, dynamic>;
+    final jsonMap = await _loadRawData();
+    if (jsonMap == null) return [];
 
     // Check if we have groups
     if (jsonMap.containsKey('groups')) {
@@ -154,6 +196,16 @@ class StorageService extends GetxService {
     return [];
   }
 
+  Future<String?> getRemoteEndpointUrl() async {
+    final data = await _loadRawData();
+    return data?['remoteEndpointUrl'] as String?;
+  }
+
+  Future<int?> getWebhookInterval() async {
+    final data = await _loadRawData();
+    return data?['webhookIntervalMs'] as int?;
+  }
+
   Future<void> clear() async {
     if (kIsWeb) return;
     final file = await _ensureFile();
@@ -167,102 +219,6 @@ class StorageService extends GetxService {
     final dir = await getApplicationSupportDirectory();
     _file = File('${dir.path}/pads.json');
     return _file!;
-  }
-
-  // --- added: audio device preference persistence ---
-
-  /// Save the selected audio device ID
-  Future<void> saveSelectedAudioDevice(int deviceId) async {
-    if (kIsWeb) return;
-    final file = await _ensureFile();
-    Map<String, dynamic> data = {};
-
-    // Load existing data
-    if (await file.exists()) {
-      final content = await file.readAsString();
-      if (content.isNotEmpty) {
-        data = jsonDecode(content) as Map<String, dynamic>;
-      }
-    }
-
-    // Update audio device preference
-    data['selectedAudioDeviceId'] = deviceId;
-
-    // Save back
-    await file.writeAsString(jsonEncode(data));
-  }
-
-  /// Get the saved audio device ID
-  Future<int?> getSavedAudioDeviceId() async {
-    if (kIsWeb) return null;
-    final file = await _ensureFile();
-    if (!await file.exists()) return null;
-
-    final content = await file.readAsString();
-    if (content.isEmpty) return null;
-
-    final jsonMap = jsonDecode(content) as Map<String, dynamic>;
-    return jsonMap['selectedAudioDeviceId'] as int?;
-  }
-
-  // --- end added ---
-
-  // --- added: remote endpoint and webhook interval persistence ---
-
-  Future<void> saveRemoteEndpointUrl(String url) async {
-    if (kIsWeb) return;
-    final file = await _ensureFile();
-    Map<String, dynamic> data = {};
-
-    if (await file.exists()) {
-      final content = await file.readAsString();
-      if (content.isNotEmpty) {
-        data = jsonDecode(content) as Map<String, dynamic>;
-      }
-    }
-
-    data['remoteEndpointUrl'] = url;
-    await file.writeAsString(jsonEncode(data));
-  }
-
-  Future<String?> getRemoteEndpointUrl() async {
-    if (kIsWeb) return null;
-    final file = await _ensureFile();
-    if (!await file.exists()) return null;
-
-    final content = await file.readAsString();
-    if (content.isEmpty) return null;
-
-    final jsonMap = jsonDecode(content) as Map<String, dynamic>;
-    return jsonMap['remoteEndpointUrl'] as String?;
-  }
-
-  Future<void> saveWebhookInterval(int intervalMs) async {
-    if (kIsWeb) return;
-    final file = await _ensureFile();
-    Map<String, dynamic> data = {};
-
-    if (await file.exists()) {
-      final content = await file.readAsString();
-      if (content.isNotEmpty) {
-        data = jsonDecode(content) as Map<String, dynamic>;
-      }
-    }
-
-    data['webhookIntervalMs'] = intervalMs;
-    await file.writeAsString(jsonEncode(data));
-  }
-
-  Future<int?> getWebhookInterval() async {
-    if (kIsWeb) return null;
-    final file = await _ensureFile();
-    if (!await file.exists()) return null;
-
-    final content = await file.readAsString();
-    if (content.isEmpty) return null;
-
-    final jsonMap = jsonDecode(content) as Map<String, dynamic>;
-    return jsonMap['webhookIntervalMs'] as int?;
   }
 
   // --- end added ---

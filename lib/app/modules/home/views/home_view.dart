@@ -1,12 +1,13 @@
 import 'dart:math' as math;
 import 'dart:async'; // added
+import 'dart:ui'; // for FontFeature
 import 'package:PadVibe/app/data/pad_model.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
-import 'package:PadVibe/app/service/midi_service.dart'; // added
+import 'package:PadVibe/app/service/midi_interface_service.dart'; // updated
 import '../controllers/home_controller.dart';
 
 class HomeView extends GetView<HomeController> {
@@ -25,6 +26,9 @@ class HomeView extends GetView<HomeController> {
   static const double _kOverlayMinH = 56.0;
   static final ValueNotifier<Size> _timerOverlaySize = ValueNotifier<Size>(
     const Size(_kOverlayW, _kOverlayH),
+  );
+  static final ValueNotifier<bool> _isTimerDetached = ValueNotifier<bool>(
+    false,
   );
 
   // Added: API to get formatted timer text only
@@ -209,11 +213,13 @@ class HomeView extends GetView<HomeController> {
     );
 
     overlay.insert(_timerOverlay!);
+    _isTimerDetached.value = true;
   }
 
   void _hideTimerOverlay() {
     _timerOverlay?.remove();
     _timerOverlay = null;
+    _isTimerDetached.value = false;
   }
   // --- End added ---
 
@@ -288,21 +294,13 @@ class HomeView extends GetView<HomeController> {
                         padding: const EdgeInsets.all(12),
                         child: LayoutBuilder(
                           builder: (context, constraints) {
-                            final width = constraints.maxWidth;
-                            const spacing = 12.0;
-                            const targetTileW = 260.0; // desired width per tile
-                            const minTileH =
-                                180.0; // enforce min height to prevent overflow
-                            const maxCols = 8;
+                            return Obx(() {
+                              final width = constraints.maxWidth;
+                              const spacing = 12.0;
+                              final cols = controller.gridColumns.value;
+                              final childAspect = 4 / 3;
 
-                            int cols = (width / (targetTileW + spacing))
-                                .floor()
-                                .clamp(1, maxCols);
-                            final itemW = (width - spacing * (cols - 1)) / cols;
-                            final childAspect = itemW / minTileH;
-
-                            return Obx(
-                              () => GridView.builder(
+                              return GridView.builder(
                                 itemCount: controller.pads.length,
                                 gridDelegate:
                                     SliverGridDelegateWithFixedCrossAxisCount(
@@ -318,6 +316,7 @@ class HomeView extends GetView<HomeController> {
                                   final fileName = hasFile
                                       ? pad.value.path!.split('/').last
                                       : 'Empty';
+
                                   return Obx(
                                     () => DropTarget(
                                       onDragDone: (detail) {
@@ -364,6 +363,11 @@ class HomeView extends GetView<HomeController> {
                                               index,
                                               details.globalPosition,
                                             ),
+                                        onTap: hasFile
+                                            ? () => controller.playPad(index)
+                                            : null,
+                                        onLongPress: () =>
+                                            controller.assignFileToPad(index),
                                         child: _pad(
                                           color,
                                           hasFile,
@@ -375,82 +379,66 @@ class HomeView extends GetView<HomeController> {
                                     ),
                                   );
                                 },
-                              ),
-                            );
+                              );
+                            });
                           },
                         ),
                       );
                     }),
                   ),
-                  _buildTabs(context),
+                  const SizedBox(height: 12),
+                  ValueListenableBuilder<bool>(
+                    valueListenable: _isTimerDetached,
+                    builder: (context, detached, _) {
+                      return Obx(() {
+                        final secs = controller.remainingSeconds.value;
+                        final accent = _urgencyColor(context, secs);
+                        return Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (!detached)
+                              Text(
+                                'Remaining: ${_formatRemaining(secs)}',
+                                style: TextStyle(
+                                  color: accent,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              )
+                            else
+                              Text(
+                                'Timer detached (${_formatRemaining(secs)})',
+                                style: TextStyle(
+                                  color: accent.withOpacity(0.85),
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              tooltip: detached ? 'Pin timer' : 'Pop-out timer',
+                              icon: Icon(
+                                detached ? Icons.push_pin : Icons.open_in_new,
+                              ),
+                              onPressed: () => _toggleTimerOverlay(context),
+                            ),
+                          ],
+                        );
+                      });
+                    },
+                  ),
                 ],
               ),
             ),
-            // master audio meter <-- new
-            const SizedBox(width: 8),
-            _MasterAudioMeter(controller: controller),
-            const SizedBox(width: 8),
           ],
         ),
       ),
-      bottomNavigationBar: Obx(() {
-        final secs = controller.remainingSeconds.value;
-        final detached = _timerOverlay != null;
-        final accent = _urgencyColor(context, secs);
-        final blinking = _blink(secs);
-        return BottomAppBar(
-          elevation: 2,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: Row(
-              children: [
-                Icon(Icons.timer_outlined, color: accent),
-                const SizedBox(width: 6),
-                AnimatedOpacity(
-                  opacity: blinking ? 1 : 0.25,
-                  duration: const Duration(milliseconds: 200),
-                  child: Icon(Icons.circle, size: 8, color: accent),
-                ),
-                const SizedBox(width: 8),
-                // --- Changed: bigger, more readable timer text; add pop-out/pin button ---
-                if (!detached)
-                  Text(
-                    'Remaining: ${_formatRemaining(secs)}',
-                    style: TextStyle(
-                      color: accent,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  )
-                else
-                  Text(
-                    'Timer detached (${_formatRemaining(secs)})',
-                    style: TextStyle(
-                      color: accent.withOpacity(0.85),
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: detached ? 'Pin timer' : 'Pop-out timer',
-                  icon: Icon(detached ? Icons.push_pin : Icons.open_in_new),
-                  onPressed: () => _toggleTimerOverlay(context),
-                ),
-                // --- End changed ---
-                const Spacer(),
-                TextButton.icon(
-                  onPressed: controller.stopAll,
-                  icon: const Icon(Icons.stop),
-                  label: const Text('Stop All'),
-                ),
-              ],
-            ),
-          ),
-        );
-      }),
     );
   }
 
@@ -459,6 +447,22 @@ class HomeView extends GetView<HomeController> {
       title: const Text('PadVibe'),
       centerTitle: false,
       actions: [
+        // Grid Size Selector
+        Obx(
+          () => DropdownButton<int>(
+            value: controller.gridColumns.value,
+            dropdownColor: Theme.of(context).colorScheme.surface,
+            underline: const SizedBox(),
+            icon: const Icon(Icons.grid_view),
+            onChanged: (val) {
+              if (val != null) controller.updateGridColumns(val);
+            },
+            items: [4, 5, 6, 8, 10]
+                .map((e) => DropdownMenuItem(value: e, child: Text('${e}x')))
+                .toList(),
+          ),
+        ),
+        const SizedBox(width: 8),
         IconButton(
           tooltip: 'Settings',
           icon: const Icon(Icons.settings),
@@ -770,8 +774,8 @@ class HomeView extends GetView<HomeController> {
           child: Obx(() {
             final devices = controller.midiService.devices;
             final connected = controller.midiService.connectedDevice.value;
-            final wsStatus = controller.midiService.wsConnectionStatus.value;
-            final sidecarStatus = controller.midiService.sidecarStatus.value;
+            final wsStatus = controller.sidecarService.wsConnectionStatus.value;
+            final sidecarStatus = controller.sidecarService.sidecarStatus.value;
 
             // Show loading if not connected to WS yet
             if (wsStatus != 'Connected') {
@@ -783,10 +787,10 @@ class HomeView extends GetView<HomeController> {
                   const SizedBox(height: 16),
                   Text('Sidecar: $sidecarStatus'),
                   Text('Connection: $wsStatus'),
-                  if (controller.midiService.lastError.isNotEmpty) ...[
+                  if (controller.sidecarService.lastError.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Text(
-                      controller.midiService.lastError.value,
+                      controller.sidecarService.lastError.value,
                       style: const TextStyle(color: Colors.red, fontSize: 12),
                       textAlign: TextAlign.center,
                     ),
@@ -1009,6 +1013,24 @@ class HomeView extends GetView<HomeController> {
           ),
         ),
         const PopupMenuItem(
+          value: 'routing',
+          child: ListTile(
+            leading: Icon(Icons.router),
+            title: Text('Audio Routing'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'filters',
+          child: ListTile(
+            leading: Icon(Icons.tune),
+            title: Text('Filters & DSP'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+        const PopupMenuItem(
           value: 'clear',
           child: ListTile(
             leading: Icon(Icons.clear),
@@ -1023,8 +1045,206 @@ class HomeView extends GetView<HomeController> {
       if (value == 'rename') controller.startRenamingPad(index);
       if (value == 'keyboard') _showKeyboardShortcutDialog(index);
       if (value == 'midi') _showMidiLearnDialog(index);
+      if (value == 'routing') _showAudioRoutingDialog(index);
+      if (value == 'filters') _showFilterDialog(index);
       if (value == 'clear') controller.clearPad(index);
     });
+  }
+
+  void _showAudioRoutingDialog(int index) {
+    Get.dialog(
+      AlertDialog(
+        title: const Text('Audio Routing (Bus)'),
+        content: SizedBox(
+          width: 400,
+          child: Obx(() {
+            final devices = controller.audioService.outputDevices;
+            final pad = controller.pads[index];
+            final currentDeviceId = pad.deviceId;
+            final currentChannels = pad.outputChannels ?? [];
+
+            // Get channel count for selected device (or global default)
+            final channelCount = controller.audioService.getDeviceChannels(
+              currentDeviceId,
+            );
+
+            return SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '1. Select Output Device',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  ListTile(
+                    title: const Text('Global Default'),
+                    subtitle: const Text(
+                      'Use the system/global selected device',
+                    ),
+                    trailing: currentDeviceId == null
+                        ? const Icon(Icons.check_circle, color: Colors.green)
+                        : null,
+                    onTap: () {
+                      controller.assignDeviceIdToPad(index, null);
+                    },
+                  ),
+                  const Divider(),
+                  ...devices.map((device) {
+                    final isSelected = currentDeviceId == device.id;
+                    return ListTile(
+                      title: Text(device.name),
+                      trailing: isSelected
+                          ? const Icon(Icons.check_circle, color: Colors.green)
+                          : null,
+                      onTap: () {
+                        controller.assignDeviceIdToPad(index, device.id);
+                      },
+                    );
+                  }),
+                  const SizedBox(height: 24),
+                  const Text(
+                    '2. Channel Mapping',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  if (channelCount <= 0)
+                    const Text('No channels available for this device.')
+                  else ...[
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: List.generate(channelCount, (i) {
+                        final isSelected = currentChannels.contains(i);
+                        return FilterChip(
+                          label: Text('Ch ${i + 1}'),
+                          selected: isSelected,
+                          onSelected: (selected) {
+                            final newList = List<int>.from(currentChannels);
+                            if (selected) {
+                              newList.add(i);
+                            } else {
+                              newList.remove(i);
+                            }
+                            newList.sort();
+                            controller.assignOutputChannelsToPad(
+                              index,
+                              newList.isEmpty ? null : newList,
+                            );
+                          },
+                        );
+                      }),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        TextButton(
+                          onPressed: () {
+                            controller.assignOutputChannelsToPad(index, [0, 1]);
+                          },
+                          child: const Text('Stereo (1+2)'),
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            controller.assignOutputChannelsToPad(index, null);
+                          },
+                          child: const Text('Reset to Default'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            );
+          }),
+        ),
+        actions: [TextButton(onPressed: Get.back, child: const Text('Done'))],
+      ),
+    );
+  }
+
+  void _showFilterDialog(int index) {
+    Get.dialog(
+      AlertDialog(
+        title: const Text('Filters & DSP'),
+        content: SizedBox(
+          width: 350,
+          child: Obx(() {
+            final pad = controller.pads[index];
+            final currentType = pad.filterType;
+            final currentFreq = pad.filterFrequency;
+
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Filter Type',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: ['none', 'lowpass', 'highpass'].map((type) {
+                    return ChoiceChip(
+                      label: Text(type.toUpperCase()),
+                      selected: currentType == type,
+                      onSelected: (val) {
+                        if (val) {
+                          controller.updateFilterForPad(
+                            index,
+                            type,
+                            currentFreq,
+                          );
+                        }
+                      },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Cutoff Frequency',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      '${currentFreq.toInt()} Hz',
+                      style: const TextStyle(fontFamily: 'Courier'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Slider(
+                  value: currentFreq,
+                  min: 20.0,
+                  max: 20000.0,
+                  divisions: 100,
+                  label: '${currentFreq.toInt()} Hz',
+                  onChanged: currentType == 'none'
+                      ? null
+                      : (val) {
+                          controller.updateFilterForPad(
+                            index,
+                            currentType,
+                            val,
+                          );
+                        },
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Adjust cutoff to perform frequency sweeps.',
+                  style: TextStyle(fontSize: 11, color: Colors.white54),
+                ),
+              ],
+            );
+          }),
+        ),
+        actions: [TextButton(onPressed: Get.back, child: const Text('Done'))],
+      ),
+    );
   }
 
   Material _pad(
@@ -1060,15 +1280,51 @@ class HomeView extends GetView<HomeController> {
       timerText = '${_formatDuration(pos)} / ${_formatDuration(len)}';
     }
 
+    // --- Waveform Data ---
+    final waveform = hasFile
+        ? controller.audioService.getWaveform(pad.path!)
+        : null;
+    if (hasFile && waveform == null) {
+      controller.audioService.loadWaveform(pad.path!);
+    }
+
     return Material(
       color: bgColor,
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: hasFile ? () => controller.playPad(index) : null,
-        onLongPress: () => controller.assignFileToPad(index),
+        // Tap handling is now in parent GestureDetector based on Edit Mode
+        onTap: null,
+        onLongPress: null,
         child: Stack(
           children: [
+            // Waveform Background
+            if (hasFile && waveform != null)
+              Positioned.fill(
+                child: StreamBuilder<String>(
+                  stream: controller.audioService.waveformUpdates,
+                  builder: (context, snapshot) {
+                    // Re-fetch waveform if update matches path (or always for now)
+                    // Optimization: check snapshot.data == pad.path
+                    final currentWave = controller.audioService.getWaveform(
+                      pad.path!,
+                    );
+                    if (currentWave == null) return const SizedBox();
+
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: CustomPaint(
+                        painter: WaveformPainter(
+                          data: currentWave,
+                          color: Colors.white.withOpacity(0.2),
+                          progress: progress ?? 0.0,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+
             // Top-Left: Pad Name and Keyboard Shortcut
             Positioned(
               top: 12,
@@ -1126,25 +1382,41 @@ class HomeView extends GetView<HomeController> {
                       );
                     }
                   }),
-                  if (controller.pads[index].keyboardShortcut != null) ...[
+                  if (controller.pads[index].keyboardShortcut != null ||
+                      controller.pads[index].deviceId != null) ...[
                     const SizedBox(height: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        controller.pads[index].keyboardShortcut!,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                    Row(
+                      children: [
+                        if (controller.pads[index].keyboardShortcut != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            margin: const EdgeInsets.only(right: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              controller.pads[index].keyboardShortcut!,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        if (controller.pads[index].deviceId != null)
+                          Tooltip(
+                            message: 'Routed to specific output',
+                            child: Icon(
+                              Icons.router,
+                              size: 14,
+                              color: Colors.white.withOpacity(0.6),
+                            ),
+                          ),
+                      ],
                     ),
                   ],
                 ],
@@ -1206,7 +1478,7 @@ class HomeView extends GetView<HomeController> {
                           overlayColor: Colors.white.withOpacity(0.2),
                         ),
                         child: Slider(
-                          value: progress ?? 0.0,
+                          value: (progress ?? 0.0).clamp(0.0, 1.0),
                           onChanged: (v) => controller.seekPad(index, v),
                         ),
                       ),
@@ -1376,6 +1648,9 @@ class HomeView extends GetView<HomeController> {
 
   void _showSettingsDialog(BuildContext context) {
     final urlCtrl = TextEditingController(text: controller.remoteEndpointUrl);
+    final localIp = controller.localApiService.localIp.value;
+    final apiEndpoint = 'http://$localIp:9696/api/v1/state';
+
     Get.dialog(
       AlertDialog(
         title: const Text('Settings'),
@@ -1384,11 +1659,19 @@ class HomeView extends GetView<HomeController> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Local API Server running on port 9696',
+              'Local API Server',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
+            const SizedBox(height: 8),
+            _buildInfoTile('Local IP:', localIp),
+            _buildInfoTile('Endpoint:', apiEndpoint, isCopyable: true),
             const SizedBox(height: 16),
-            const Text('Remote Webhook URL (POST)'),
+            const Divider(),
+            const SizedBox(height: 16),
+            const Text(
+              'Remote Webhook URL (POST)',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 8),
             TextField(
               controller: urlCtrl,
@@ -1409,6 +1692,47 @@ class HomeView extends GetView<HomeController> {
             },
             child: const Text('Save'),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoTile(String label, String value, {bool isCopyable = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(fontFamily: 'Courier', fontSize: 12),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (isCopyable)
+            IconButton(
+              icon: const Icon(Icons.copy, size: 16),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: value));
+                if (Get.context != null) {
+                  ScaffoldMessenger.of(Get.context!).showSnackBar(
+                    const SnackBar(
+                      content: Text('Endpoint copied to clipboard'),
+                      duration: Duration(seconds: 1),
+                      behavior: SnackBarBehavior.floating,
+                      width: 300,
+                    ),
+                  );
+                }
+              },
+            ),
         ],
       ),
     );
@@ -1637,5 +1961,81 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
         ],
       ),
     );
+  }
+}
+
+class WaveformPainter extends CustomPainter {
+  final List<double> data;
+  final Color color;
+  final double progress;
+
+  WaveformPainter({
+    required this.data,
+    required this.color,
+    this.progress = 0.0,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
+
+    final playedPaint = Paint()
+      ..color = color.withOpacity(0.9)
+      ..style = PaintingStyle.fill;
+
+    // Draw background/unplayed waveform
+    _drawWave(canvas, size, paint, data);
+
+    // Draw played portion overlay (optional, or just color difference)
+    if (progress > 0) {
+      canvas.save();
+      canvas.clipRect(Rect.fromLTWH(0, 0, size.width * progress, size.height));
+      _drawWave(canvas, size, playedPaint, data);
+      canvas.restore();
+    }
+  }
+
+  void _drawWave(Canvas canvas, Size size, Paint paint, List<double> waveData) {
+    final width = size.width;
+    final height = size.height;
+    final center = height / 2;
+
+    // We want to draw mirrored waveform
+    final count = waveData.length;
+    final step = width / count;
+
+    for (int i = 0; i < count; i++) {
+      final val = waveData[i];
+      final x = i * step;
+      // Amplitude scaling: max height is half container
+      final amp = val * (height * 0.4);
+
+      // Draw bar (or line)
+      // canvas.drawLine(Offset(x, center - amp), Offset(x, center + amp), paint);
+
+      // Rounded rect for cleaner look
+      final barRect = RRect.fromRectAndRadius(
+        Rect.fromCenter(
+          center: Offset(x + step / 2, center),
+          width: step * 0.8,
+          height: max(2.0, amp * 2),
+        ),
+        const Radius.circular(2),
+      );
+      canvas.drawRRect(barRect, paint);
+    }
+  }
+
+  double max(double a, double b) => a > b ? a : b;
+
+  @override
+  bool shouldRepaint(covariant WaveformPainter oldDelegate) {
+    return oldDelegate.data != data ||
+        oldDelegate.progress != progress ||
+        oldDelegate.color != color;
   }
 }

@@ -1,3 +1,6 @@
 mido
 python-rtmidi
 websockets
+sounddevice
+soundfile
+numpy

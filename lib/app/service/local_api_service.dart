@@ -24,13 +24,30 @@ class LocalApiService extends GetxService {
 
   final RxString remoteEndpointUrl = ''.obs;
   final RxInt webhookIntervalMs = 1000.obs;
+  final RxString localIp = '127.0.0.1'.obs;
 
   @override
   void onInit() {
     super.onInit();
+    _getHostIp();
     _loadSettings();
     _startServer();
     _startWebhookTimer();
+  }
+
+  Future<void> _getHostIp() async {
+    try {
+      for (var interface in await NetworkInterface.list()) {
+        for (var addr in interface.addresses) {
+          if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
+            localIp.value = addr.address;
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      print('Error getting local IP: $e');
+    }
   }
 
   @override
@@ -139,7 +156,6 @@ class LocalApiService extends GetxService {
   Future<void> _sendWebhook() async {
     final url = remoteEndpointUrl.value;
     if (url.isEmpty) {
-      print('Webhook URL empty');
       return;
     }
 

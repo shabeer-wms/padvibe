@@ -3,20 +3,21 @@ import 'dart:io';
 import 'package:PadVibe/app/data/pad_model.dart';
 import 'package:PadVibe/app/service/audio_player_service.dart';
 import 'package:PadVibe/app/service/local_api_service.dart';
-import 'package:PadVibe/app/service/midi_service.dart';
+import 'package:PadVibe/app/service/midi_interface_service.dart';
+import 'package:PadVibe/app/service/sidecar_service.dart';
 import 'package:PadVibe/app/service/storage_service.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
-import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:get/get.dart';
 
 class HomeController extends GetxController {
   final audioService = Get.find<AudioPlayerService>();
-  final midiService = Get.put(MidiService());
-  final storage = Get.put(StorageService(), permanent: true);
-  final localApiService = Get.put(LocalApiService(), permanent: true);
+  final midiService = Get.find<MidiInterfaceService>();
+  final sidecarService = Get.find<SidecarService>();
+  final storage = Get.find<StorageService>();
+  final localApiService = Get.find<LocalApiService>();
 
   final count = 0.obs;
   // Signal to force UI updates (e.g. when seeking while paused)
@@ -26,6 +27,9 @@ class HomeController extends GetxController {
   final groups = <PadGroup>[].obs;
   final currentGroupIndex = 0.obs;
 
+  // Grid Settings
+  final gridColumns = 5.obs; // Default to 5 columns
+
   // The pads currently displayed (synced with groups[currentGroupIndex])
   final pads = <Pad>[for (int i = 1; i <= 20; i++) Pad(name: 'Pad $i')].obs;
 
@@ -34,6 +38,8 @@ class HomeController extends GetxController {
 
   // Track the created timer window id to push updates
   int? _timerWindowId;
+  Timer? _deviceSwitchDebounce;
+  final Map<int, Timer> _padUpdateDebounce = {};
 
   final FocusNode focusNode = FocusNode();
 
@@ -46,6 +52,37 @@ class HomeController extends GetxController {
     if (index < 0 || index >= pads.length) return;
     editingPadIndex.value = index;
     renamePadInputController.text = pads[index].name;
+  }
+
+  // ... (keep existing methods)
+
+  Future<void> selectAudioDevice(PlaybackDevice device) async {
+    _deviceSwitchDebounce?.cancel();
+    _deviceSwitchDebounce = Timer(const Duration(milliseconds: 400), () async {
+      await audioService.selectOutputDevice(device);
+      await storage.saveSelectedAudioDevice(device.id, device.name);
+
+      // Migrate currently playing pads that are using the Global Default (deviceId == null)
+      for (final pad in pads) {
+        if (pad.path != null &&
+            pad.deviceId == null &&
+            audioService.isPlaying(pad.path!)) {
+          // Restart on new device
+          final currentPos = audioService.getPosition(pad.path!);
+          // Stop without resetting active handle immediately to avoid UI flicker?
+          // Actually stopPath will clear handle.
+          await audioService.stopPath(pad.path!);
+          await Future.delayed(const Duration(milliseconds: 50));
+          await audioService.playSound(
+            pad.path!,
+            loop: pad.isLooping,
+            deviceId: null, // Will use new default
+            outputChannels: pad.outputChannels,
+          );
+          await audioService.seek(pad.path!, currentPos);
+        }
+      }
+    });
   }
 
   void savePadName(int index, String name) {
@@ -95,6 +132,7 @@ class HomeController extends GetxController {
       // and maybe iterate all groups if needed.
       // To avoid complexity, we'll just sanitize the active pads when they are loaded.
       await _sanitizeCurrentPads();
+      _loadAllWaveforms();
     }();
 
     _ticker = Timer.periodic(const Duration(milliseconds: 16), (_) async {
@@ -114,6 +152,8 @@ class HomeController extends GetxController {
 
     // Listen to MIDI events
     midiService.noteStream.listen((event) {
+      if (editingPadIndex.value != -1) return; // Ignore MIDI if editing name
+
       if (event.type == MidiEventType.noteOn) {
         print('HomeController received MIDI Note On: ${event.note}');
         final index = pads.indexWhere((p) => p.midiNote == event.note);
@@ -126,17 +166,36 @@ class HomeController extends GetxController {
 
     // Restore saved audio output device
     () async {
+      final savedDeviceName = await storage.getSavedAudioDeviceName();
       final savedDeviceId = await storage.getSavedAudioDeviceId();
-      if (savedDeviceId != null) {
-        // Wait for devices to be enumerated
-        await Future.delayed(const Duration(milliseconds: 500));
-        final device = audioService.outputDevices.firstWhere(
-          (d) => d.id == savedDeviceId,
-          orElse: () => audioService.outputDevices.isNotEmpty
-              ? audioService.outputDevices.first
-              : throw StateError('No devices'),
-        );
-        await audioService.selectOutputDevice(device);
+
+      if (savedDeviceName != null || savedDeviceId != null) {
+        // Wait for devices to be enumerated (max 5 seconds)
+        int retries = 0;
+        while (audioService.outputDevices.isEmpty && retries < 10) {
+          await Future.delayed(const Duration(milliseconds: 500));
+          retries++;
+        }
+
+        if (audioService.outputDevices.isNotEmpty) {
+          PlaybackDevice? device;
+
+          // Try matching by name first (most reliable)
+          if (savedDeviceName != null) {
+            device = audioService.outputDevices.firstWhereOrNull(
+              (d) => d.name == savedDeviceName,
+            );
+          }
+
+          // Fallback to ID
+          device ??= audioService.outputDevices.firstWhereOrNull(
+            (d) => d.id == savedDeviceId,
+          );
+
+          if (device != null) {
+            await audioService.selectOutputDevice(device);
+          }
+        }
       }
     }();
   }
@@ -172,6 +231,19 @@ class HomeController extends GetxController {
     }
   }
 
+  void _loadAllWaveforms() {
+    for (final pad in pads) {
+      if (pad.path != null) {
+        audioService.loadWaveform(pad.path!);
+      }
+    }
+  }
+
+  void updateGridColumns(int cols) {
+    gridColumns.value = cols;
+    // Persist later
+  }
+
   // --- Tab Management ---
 
   void switchTab(int index) {
@@ -183,6 +255,7 @@ class HomeController extends GetxController {
     currentGroupIndex.value = index;
     pads.assignAll(groups[index].pads);
     _sanitizeCurrentPads(); // Check files for the new tab
+    _loadAllWaveforms();
   }
 
   void addTab(String name) {
@@ -245,7 +318,82 @@ class HomeController extends GetxController {
       }
       return;
     }
-    await audioService.playSound(path, loop: pad.isLooping);
+    await audioService.playSound(
+      path,
+      loop: pad.isLooping,
+      deviceId: pad.deviceId,
+      outputChannels: pad.outputChannels,
+      filterType: pad.filterType,
+      filterFrequency: pad.filterFrequency,
+    );
+  }
+
+  void updateFilterForPad(int index, String type, double freq) async {
+    final pad = pads[index];
+    pads[index] = pad.copyWith(filterType: type, filterFrequency: freq);
+    _updateCurrentGroup();
+    _saveGroups();
+
+    if (pad.path != null && audioService.isPlaying(pad.path!)) {
+      await audioService.setFilter(pad.path!, type, freq);
+    }
+  }
+
+  void assignDeviceIdToPad(int index, int? deviceId) async {
+    _padUpdateDebounce[index]?.cancel();
+    _padUpdateDebounce[index] = Timer(
+      const Duration(milliseconds: 300),
+      () async {
+        final pad = pads[index];
+        final oldPath = pad.path;
+
+        // When switching device, reset channels to avoid invalid routing
+        pads[index] = pads[index].copyWith(
+          deviceId: deviceId,
+          clearDeviceId: deviceId == null,
+          clearOutputChannels: true,
+        );
+        _updateCurrentGroup();
+        _saveGroups();
+
+        // Instant routing update if playing
+        if (oldPath != null && audioService.isPlaying(oldPath)) {
+          final currentPos = audioService.getPosition(oldPath);
+          final activeDeviceId = audioService.getDeviceIdForPath(oldPath);
+          final effectiveNewDeviceId =
+              deviceId ?? audioService.selectedDevice.value?.id;
+
+          if (activeDeviceId == effectiveNewDeviceId) {
+            // Same device, just reset channels to default
+            await audioService.setRouting(oldPath, null);
+          } else {
+            // Different device, must restart
+            await audioService.stopPath(oldPath);
+            await audioService.playSound(
+              oldPath,
+              loop: pad.isLooping,
+              deviceId: deviceId,
+            );
+            await audioService.seek(oldPath, currentPos);
+          }
+        }
+      },
+    );
+  }
+
+  void assignOutputChannelsToPad(int index, List<int>? channels) async {
+    final pad = pads[index];
+    pads[index] = pad.copyWith(
+      outputChannels: channels,
+      clearOutputChannels: channels == null,
+    );
+    _updateCurrentGroup();
+    _saveGroups();
+
+    // Instant routing update if playing
+    if (pad.path != null && audioService.isPlaying(pad.path!)) {
+      await audioService.setRouting(pad.path!, channels);
+    }
   }
 
   Future<void> stopPad(int index) async {
@@ -327,13 +475,19 @@ class HomeController extends GetxController {
   }
 
   void assignKeyboardShortcut(int index, String? keyLabel) {
-    pads[index] = pads[index].copyWith(keyboardShortcut: keyLabel);
+    pads[index] = pads[index].copyWith(
+      keyboardShortcut: keyLabel,
+      clearKeyboardShortcut: keyLabel == null,
+    );
     _updateCurrentGroup();
     _saveGroups();
   }
 
   void assignMidiNote(int index, int? note) {
-    pads[index] = pads[index].copyWith(midiNote: note);
+    pads[index] = pads[index].copyWith(
+      midiNote: note,
+      clearMidiNote: note == null,
+    );
     _updateCurrentGroup();
     _saveGroups();
   }
@@ -442,11 +596,6 @@ class HomeController extends GetxController {
   }
 
   void increment() => count.value++;
-
-  Future<void> selectAudioDevice(PlaybackDevice device) async {
-    await audioService.selectOutputDevice(device);
-    await storage.saveSelectedAudioDevice(device.id);
-  }
 
   void assignFilePathToPad(int index, String data) async {
     // drag-and-drop path assignment; copy to app library

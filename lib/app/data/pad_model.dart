@@ -5,6 +5,10 @@ class Pad {
   final bool isLooping;
   final String? keyboardShortcut;
   final int? midiNote;
+  final int? deviceId; // Added for audio routing
+  final List<int>? outputChannels; // Added for channel routing
+  final String filterType; // 'none', 'lowpass', 'highpass'
+  final double filterFrequency;
 
   const Pad({
     required this.name,
@@ -13,6 +17,10 @@ class Pad {
     this.isLooping = false,
     this.keyboardShortcut,
     this.midiNote,
+    this.deviceId,
+    this.outputChannels,
+    this.filterType = 'none',
+    this.filterFrequency = 20000.0,
   });
 
   Pad copyWith({
@@ -22,25 +30,44 @@ class Pad {
     bool? isLooping,
     String? keyboardShortcut,
     int? midiNote,
+    int? deviceId,
+    List<int>? outputChannels,
+    String? filterType,
+    double? filterFrequency,
+    bool clearPath = false,
+    bool clearDeviceId = false,
+    bool clearOutputChannels = false,
+    bool clearKeyboardShortcut = false,
+    bool clearMidiNote = false,
   }) {
     return Pad(
       name: name ?? this.name,
-      path: path ?? this.path,
+      path: clearPath ? null : (path ?? this.path),
       color: color ?? this.color,
       isLooping: isLooping ?? this.isLooping,
-      keyboardShortcut: keyboardShortcut ?? this.keyboardShortcut,
-      midiNote: midiNote ?? this.midiNote,
+      keyboardShortcut:
+          clearKeyboardShortcut ? null : (keyboardShortcut ?? this.keyboardShortcut),
+      midiNote: clearMidiNote ? null : (midiNote ?? this.midiNote),
+      deviceId: clearDeviceId ? null : (deviceId ?? this.deviceId),
+      outputChannels:
+          clearOutputChannels ? null : (outputChannels ?? this.outputChannels),
+      filterType: filterType ?? this.filterType,
+      filterFrequency: filterFrequency ?? this.filterFrequency,
     );
   }
 
   Map<String, dynamic> toJson() => {
-    'name': name,
-    'path': path,
-    'color': color,
-    'isLooping': isLooping,
-    'keyboardShortcut': keyboardShortcut,
-    'midiNote': midiNote,
-  };
+        'name': name,
+        'path': path,
+        'color': color,
+        'isLooping': isLooping,
+        'keyboardShortcut': keyboardShortcut,
+        'midiNote': midiNote,
+        'deviceId': deviceId,
+        'outputChannels': outputChannels,
+        'filterType': filterType,
+        'filterFrequency': filterFrequency,
+      };
 
   factory Pad.fromJson(Map<String, dynamic> json) {
     return Pad(
@@ -50,6 +77,10 @@ class Pad {
       isLooping: (json['isLooping'] as bool?) ?? false,
       keyboardShortcut: json['keyboardShortcut'] as String?,
       midiNote: json['midiNote'] as int?,
+      deviceId: json['deviceId'] as int?,
+      outputChannels: (json['outputChannels'] as List?)?.cast<int>(),
+      filterType: (json['filterType'] as String?) ?? 'none',
+      filterFrequency: (json['filterFrequency'] as num?)?.toDouble() ?? 20000.0,
     );
   }
 }
