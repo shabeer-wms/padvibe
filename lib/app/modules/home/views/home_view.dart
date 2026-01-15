@@ -387,52 +387,22 @@ class HomeView extends GetView<HomeController> {
                     }),
                   ),
                   const SizedBox(height: 12),
-                  ValueListenableBuilder<bool>(
-                    valueListenable: _isTimerDetached,
-                    builder: (context, detached, _) {
-                      return Obx(() {
-                        final secs = controller.remainingSeconds.value;
-                        final accent = _urgencyColor(context, secs);
-                        return Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            if (!detached)
-                              Text(
-                                'Remaining: ${_formatRemaining(secs)}',
-                                style: TextStyle(
-                                  color: accent,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w600,
-                                  fontFeatures: const [
-                                    FontFeature.tabularFigures(),
-                                  ],
-                                ),
-                              )
-                            else
-                              Text(
-                                'Timer detached (${_formatRemaining(secs)})',
-                                style: TextStyle(
-                                  color: accent.withOpacity(0.85),
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w600,
-                                  fontFeatures: const [
-                                    FontFeature.tabularFigures(),
-                                  ],
-                                ),
-                              ),
-                            const SizedBox(width: 8),
-                            IconButton(
-                              tooltip: detached ? 'Pin timer' : 'Pop-out timer',
-                              icon: Icon(
-                                detached ? Icons.push_pin : Icons.open_in_new,
-                              ),
-                              onPressed: () => _toggleTimerOverlay(context),
-                            ),
-                          ],
-                        );
-                      });
-                    },
-                  ),
+                  Obx(() {
+                    final secs = controller.remainingSeconds.value;
+                    final accent = _urgencyColor(context, secs);
+                    return Text(
+                      'Remaining: ${_formatRemaining(secs)}',
+                      style: TextStyle(
+                        color: accent,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        fontFeatures: const [
+                          FontFeature.tabularFigures(),
+                        ],
+                      ),
+                    );
+                  }),
+                  const SizedBox(height: 12),
                 ],
               ),
             ),
