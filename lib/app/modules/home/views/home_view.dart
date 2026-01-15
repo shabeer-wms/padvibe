@@ -386,7 +386,6 @@ class HomeView extends GetView<HomeController> {
                       );
                     }),
                   ),
-                  const SizedBox(height: 12),
                   Obx(() {
                     final secs = controller.remainingSeconds.value;
                     final accent = _urgencyColor(context, secs);
@@ -401,8 +400,7 @@ class HomeView extends GetView<HomeController> {
                         ],
                       ),
                     );
-                  }),
-                  const SizedBox(height: 12),
+                  }).paddingAll(10),
                 ],
               ),
             ),
