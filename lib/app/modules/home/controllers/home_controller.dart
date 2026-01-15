@@ -93,11 +93,13 @@ class HomeController extends GetxController {
     _saveGroups();
     editingPadIndex.value = -1;
     renamePadInputController.clear();
+    focusNode.requestFocus();
   }
 
   void cancelRenamingPad() {
     editingPadIndex.value = -1;
     renamePadInputController.clear();
+    focusNode.requestFocus();
   }
 
   @override
@@ -476,6 +478,15 @@ class HomeController extends GetxController {
   }
 
   void assignKeyboardShortcut(int index, String? keyLabel) {
+    if (keyLabel != null) {
+      // Rule: Ensure uniqueness. If this key is already assigned to another pad, remove it from that pad.
+      for (int i = 0; i < pads.length; i++) {
+        if (i != index && pads[i].keyboardShortcut == keyLabel) {
+          pads[i] = pads[i].copyWith(clearKeyboardShortcut: true);
+        }
+      }
+    }
+
     pads[index] = pads[index].copyWith(
       keyboardShortcut: keyLabel,
       clearKeyboardShortcut: keyLabel == null,
@@ -642,9 +653,9 @@ class HomeController extends GetxController {
 
   // --- Master Volume ---
   void updateMasterVolume(double volume) {
-    masterVolume.value = volume.clamp(0.0, 1.0);
-    // TODO: Implement setMasterVolume in audioService
-    // audioService.setMasterVolume(volume);
+    final v = volume.clamp(0.0, 1.0);
+    masterVolume.value = v;
+    audioService.setMasterVolume(v);
     // Optionally persist this setting
   }
 }

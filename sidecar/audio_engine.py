@@ -8,6 +8,11 @@ class AudioEngine:
         self.streams = {}
         self.next_stream_id = 0
         self.lock = threading.RLock()
+        self.master_volume = 1.0
+        # Stores current RMS/Peak per stream: { stream_id: (rms_l, rms_r, peak_l, peak_r) }
+        self.stream_levels = {}
+        self.last_mix = np.zeros((1024, 2))
+        self.mix_lock = threading.Lock()
 
     def list_devices(self):
         """Returns a list of available output devices."""
@@ -131,45 +136,7 @@ class AudioEngine:
                 
                 # Apply volume
                 if len(data_chunk) > 0:
-                    data_chunk *= ctx["volume"]
-
-                # --- Apply Filter (One-Pole) ---
-                if ctx["filter_type"] != "none" and len(data_chunk) > 0:
-                    # Initialize state if needed
-                    if ctx["filter_state"] is None:
-                        ctx["filter_state"] = np.zeros(channels_in)
-                    
-                    # Calculate alpha (cutoff)
-                    # fc = cutoff frequency, fs = sample rate
-                    # alpha = dt / (RC + dt) = 2pi * fc / (2pi * fc + fs)
-                    alpha = (2 * np.pi * ctx["filter_freq"]) / (2 * np.pi * ctx["filter_freq"] + f.samplerate)
-                    alpha = np.clip(alpha, 0.0, 1.0)
-
-                    # We'll use a simple loop for the one-pole filter
-                    # While loops in Python are slow, but for 1024 frames it's okay-ish.
-                    # A better way is using scipy.signal.lfilter but we only have numpy.
-                    # Numpy recursion is hard to vectorise. 
-                    # Let's use a reasonably efficient loop.
-                    
-                    y = ctx["filter_state"]
-                    
-                    # Reshape if mono to make it 2D for consistency
-                    is_mono = len(data_chunk.shape) == 1
-                    work_chunk = data_chunk.reshape(-1, 1) if is_mono else data_chunk
-                    
-                    filtered = np.zeros_like(work_chunk)
-                    
-                    if ctx["filter_type"] == "lowpass":
-                        for n in range(len(work_chunk)):
-                            y = y + alpha * (work_chunk[n] - y)
-                            filtered[n] = y
-                    elif ctx["filter_type"] == "highpass":
-                        for n in range(len(work_chunk)):
-                            y = y + alpha * (work_chunk[n] - y)
-                            filtered[n] = work_chunk[n] - y
-                    
-                    ctx["filter_state"] = y
-                    data_chunk = filtered.flatten() if is_mono else filtered
+                    data_chunk *= (ctx["volume"] * self.master_volume)
 
                 # Assign to outdata with channel handling
                 outdata.fill(0) 
@@ -210,6 +177,25 @@ class AudioEngine:
                     # Prevents harsh digital clipping by squashing peaks near 1.0
                     # Using tanh for a soft-knee limit
                     np.tanh(outdata[:write_len], out=outdata[:write_len]) 
+                    
+                    # --- Metering Calculation (Post-Routing, Post-Limiting) ---
+                    # Calculate RMS and Peak for hardware channels 0 and 1
+                    # This ensures the meter matches what the user actually hears on L/R
+                    meter_data = outdata[:write_len]
+                    peaks = np.max(np.abs(meter_data), axis=0)
+                    rms_vals = np.sqrt(np.mean(meter_data**2, axis=0))
+
+                    pl = float(peaks[0]) if len(peaks) > 0 else 0.0
+                    pr = float(peaks[1]) if len(peaks) > 1 else 0.0
+                    rl = float(rms_vals[0]) if len(rms_vals) > 0 else 0.0
+                    rr = float(rms_vals[1]) if len(rms_vals) > 1 else 0.0
+                    
+                    self.stream_levels[stream_id] = (rl, rr, pl, pr)
+
+                    # Store a copy of the final mixed outdata for spectrum analysis
+                    if write_len == 1024:
+                        with self.mix_lock:
+                            self.last_mix = outdata.copy()
 
                     if write_len < len(outdata) and ctx["finished"]:
                         if not ctx["on_finished_called"] and ctx["on_finished"]:
@@ -217,6 +203,7 @@ class AudioEngine:
                             ctx["on_finished"]()
                         raise sd.CallbackStop
                 else:
+                    self.stream_levels[stream_id] = (0.0, 0.0, 0.0, 0.0)
                     if ctx["finished"]:
                         if not ctx["on_finished_called"] and ctx["on_finished"]:
                             ctx["on_finished_called"] = True
@@ -273,6 +260,45 @@ class AudioEngine:
             ids = list(self.streams.keys())
             for sid in ids:
                 self.stop(sid)
+
+    def set_master_volume(self, volume):
+        with self.lock:
+            self.master_volume = max(0.0, min(1.0, volume))
+
+    def get_levels(self):
+        """Returns aggregated Master Levels and a 16-band spectrum."""
+        with self.lock:
+            active_ids = list(self.streams.keys())
+        
+        rms_l_pow = 0.0
+        rms_r_pow = 0.0
+        peak_l_max = 0.0
+        peak_r_max = 0.0
+        
+        to_remove = []
+        for sid, levels in list(self.stream_levels.items()):
+            if sid not in active_ids:
+                to_remove.append(sid)
+                continue
+            
+            rl, rr, pl, pr = levels
+            # Sum of powers for RMS
+            rms_l_pow += rl**2
+            rms_r_pow += rr**2
+            # Max for Peaks
+            peak_l_max = max(peak_l_max, pl)
+            peak_r_max = max(peak_r_max, pr)
+
+        for sid in to_remove:
+            del self.stream_levels[sid]
+            
+        return (
+            min(1.0, np.sqrt(rms_l_pow)),
+            min(1.0, np.sqrt(rms_r_pow)),
+            min(1.0, peak_l_max),
+            min(1.0, peak_r_max),
+            [] # Spectrum placeholder
+        )
 
     def set_volume(self, stream_id, volume):
         with self.lock:

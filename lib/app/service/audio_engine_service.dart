@@ -23,6 +23,13 @@ class AudioEngineService extends GetxService {
 
   final audioDevices = <AudioDevice>[].obs;
 
+  // Master Meter Observables
+  final masterRmsL = 0.0.obs;
+  final masterRmsR = 0.0.obs;
+  final masterPeakL = 0.0.obs;
+  final masterPeakR = 0.0.obs;
+  final masterVolume = 1.0.obs;
+
   // Stream for audio events (started/stopped) to help AudioPlayerService sync
   final _audioEventStreamController =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -39,6 +46,7 @@ class AudioEngineService extends GetxService {
     _sidecar.registerHandler('audio_finished', _handleAudioEvent);
     _sidecar.registerHandler('audio_loop_updated', _handleAudioEvent);
     _sidecar.registerHandler('waveform_data', _handleAudioEvent);
+    _sidecar.registerHandler('audio_levels', _handleAudioEvent);
 
     // Refresh devices when connected
     ever(_sidecar.wsConnectionStatus, (status) {
@@ -62,6 +70,7 @@ class AudioEngineService extends GetxService {
     _sidecar.unregisterHandler('audio_finished', _handleAudioEvent);
     _sidecar.unregisterHandler('audio_loop_updated', _handleAudioEvent);
     _sidecar.unregisterHandler('waveform_data', _handleAudioEvent);
+    _sidecar.unregisterHandler('audio_levels', _handleAudioEvent);
     _audioEventStreamController.close();
     super.onClose();
   }
@@ -110,6 +119,16 @@ class AudioEngineService extends GetxService {
 
   void stopAllAudio() {
     _sidecar.send(jsonEncode({'command': 'stop_all_audio'}));
+  }
+
+  void setMasterVolume(double volume) {
+    masterVolume.value = volume;
+    _sidecar.send(
+      jsonEncode({
+        'command': 'set_master_volume',
+        'volume': volume,
+      }),
+    );
   }
 
   void setVolume(int streamId, double volume) {
@@ -181,6 +200,12 @@ class AudioEngineService extends GetxService {
   }
 
   void _handleAudioEvent(Map<String, dynamic> data) {
+    if (data['type'] == 'audio_levels') {
+      masterRmsL.value = (data['rms_l'] ?? 0.0).toDouble();
+      masterRmsR.value = (data['rms_r'] ?? 0.0).toDouble();
+      masterPeakL.value = (data['peak_l'] ?? 0.0).toDouble();
+      masterPeakR.value = (data['peak_r'] ?? 0.0).toDouble();
+    }
     _audioEventStreamController.add(data);
   }
 }

@@ -82,6 +82,9 @@ class AudioPlayerService extends GetxService {
   // --- added: expose master RMS levels for meters ---
   double masterRmsL = 0.0;
   double masterRmsR = 0.0;
+  final RxDouble masterPeakL = 0.0.obs;
+  final RxDouble masterPeakR = 0.0.obs;
+  final RxDouble masterVolume = 1.0.obs;
   // --- end added ---
 
   StreamSubscription? _audioEventSub;
@@ -107,6 +110,8 @@ class AudioPlayerService extends GetxService {
         _handleAudioLoopUpdated(event);
       } else if (type == 'waveform_data') {
         _handleWaveformData(event);
+      } else if (type == 'audio_levels') {
+        _handleAudioLevels(event);
       }
     });
 
@@ -163,6 +168,13 @@ class AudioPlayerService extends GetxService {
     _activeStreams[streamId] = stream;
     _handlePath[streamId] = path;
     activeHandles.add(streamId);
+  }
+
+  void _handleAudioLevels(Map<String, dynamic> event) {
+    masterRmsL = (event['rms_l'] as num).toDouble();
+    masterRmsR = (event['rms_r'] as num).toDouble();
+    masterPeakL.value = (event['peak_l'] as num).toDouble();
+    masterPeakR.value = (event['peak_r'] as num).toDouble();
   }
 
   void _handleAudioLoopUpdated(Map<String, dynamic> event) {
@@ -461,6 +473,11 @@ class AudioPlayerService extends GetxService {
   Future<void> refreshOutputDevices() async {
     if (!isInitialized.value) return;
     _audioEngine.refreshAudioDevices();
+  }
+
+  void setMasterVolume(double volume) {
+    masterVolume.value = volume;
+    _audioEngine.setMasterVolume(volume);
   }
 
   Future<void> selectOutputDevice(PlaybackDevice device) async {
