@@ -190,9 +190,8 @@ class HomeView extends GetView<HomeController> {
                                     child: Icon(
                                       Icons.open_in_full,
                                       size: 16,
-                                      color: Theme.of(
-                                        ctx,
-                                      ).colorScheme.onSurface.withValues(alpha: 0.6),
+                                      color: Theme.of(ctx).colorScheme.onSurface
+                                          .withValues(alpha: 0.6),
                                     ),
                                   ),
                                 ),
@@ -281,7 +280,6 @@ class HomeView extends GetView<HomeController> {
             Expanded(
               child: Column(
                 children: [
-                  _buildTabs(context),
                   Expanded(
                     child: Obx(() {
                       // Read the ticker to trigger rebuilds for progress bars.
@@ -385,24 +383,11 @@ class HomeView extends GetView<HomeController> {
                       );
                     }),
                   ),
-                  Obx(() {
-                    final secs = controller.remainingSeconds.value;
-                    final accent = _urgencyColor(context, secs);
-                    return Text(
-                      'Remaining: ${_formatRemaining(secs)}',
-                      style: TextStyle(
-                        color: accent,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                        fontFeatures: const [
-                          FontFeature.tabularFigures(),
-                        ],
-                      ),
-                    );
-                  }).paddingAll(10),
+                  _buildBottomPanel(context),
                 ],
               ),
             ),
+            _buildMasterMonitor(context),
           ],
         ),
       ),
@@ -414,11 +399,6 @@ class HomeView extends GetView<HomeController> {
       title: const Text('PadVibe'),
       centerTitle: false,
       actions: [
-        IconButton(
-          tooltip: 'Toggle Timer Overlay',
-          icon: const Icon(Icons.timer),
-          onPressed: () => _toggleTimerOverlay(context),
-        ),
         // Grid Size Selector
         Obx(
           () => DropdownButton<int>(
@@ -441,11 +421,6 @@ class HomeView extends GetView<HomeController> {
           onPressed: () => _showSettingsDialog(context),
         ),
         IconButton(
-          tooltip: 'Add files',
-          icon: const Icon(Icons.library_music),
-          onPressed: controller.addFiles,
-        ),
-        IconButton(
           tooltip: 'MIDI Devices',
           icon: const Icon(Icons.piano),
           onPressed: () => _showMidiDevicesDialog(context),
@@ -456,91 +431,202 @@ class HomeView extends GetView<HomeController> {
           onPressed: () => _showAudioOutputDialog(context),
         ),
         IconButton(
-          tooltip: 'Stop all',
-          icon: const Icon(Icons.stop_circle_outlined),
-          onPressed: controller.stopAll,
+          tooltip: 'Power',
+          icon: const Icon(Icons.power_settings_new),
+          onPressed: () {},
         ),
-        IconButton(
-          tooltip: 'Clear all',
-          icon: const Icon(Icons.delete_sweep_outlined),
-          onPressed: () async {
-            final ok = await showDialog<bool>(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                title: const Text('Clear all pads?'),
-                content: const Text(
-                  'This stops playback, removes assigned files, and clears saved layout.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Get.back(result: false),
-                    child: const Text('Cancel'),
-                  ),
-                  FilledButton(
-                    onPressed: () => Get.back(result: true),
-                    child: const Text('Clear'),
-                  ),
-                ],
-              ),
-            );
-            if (ok == true) {
-              await controller.clearAll();
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('All pads cleared')),
-                );
-              }
-            }
-          },
-        ),
+        const SizedBox(width: 8),
       ],
     );
   }
 
-  Widget _buildTabs(BuildContext context) {
+  Widget _buildBottomPanel(BuildContext context) {
     return Container(
-      height: 50,
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      height: 60,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: Border(
+          top: BorderSide(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            width: 1,
+          ),
+        ),
+      ),
       child: Row(
         children: [
+          // Tabs section
           Expanded(
             child: Obx(() {
-              return ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: controller.groups.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (context, index) {
-                  final group = controller.groups[index];
-                  return Obx(() {
-                    final isSelected =
-                        controller.currentGroupIndex.value == index;
-                    return GestureDetector(
-                      onSecondaryTapUp: (details) => _showTabOptions(
-                        context,
-                        index,
-                        details.globalPosition,
-                      ),
-                      onDoubleTapDown: (details) => _showRenameTabPopover(
-                        context,
-                        index,
-                        details.globalPosition,
-                      ),
-                      child: ChoiceChip(
-                        label: Text(group.name),
-                        selected: isSelected,
-                        onSelected: (_) => controller.switchTab(index),
-                      ),
-                    );
-                  });
-                },
+              return Row(
+                children: [
+                  // Tabs
+                  Flexible(
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: controller.groups.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) {
+                        final group = controller.groups[index];
+                        return Obx(() {
+                          final isSelected =
+                              controller.currentGroupIndex.value == index;
+                          return GestureDetector(
+                            onSecondaryTapUp: (details) => _showTabOptions(
+                              context,
+                              index,
+                              details.globalPosition,
+                            ),
+                            onDoubleTapDown: (details) => _showRenameTabPopover(
+                              context,
+                              index,
+                              details.globalPosition,
+                            ),
+                            child: ChoiceChip(
+                              label: Text(group.name),
+                              selected: isSelected,
+                              onSelected: (_) => controller.switchTab(index),
+                            ),
+                          );
+                        });
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // Add tab button
+                  IconButton(
+                    icon: const Icon(Icons.add),
+                    onPressed: () => _showAddTabDialog(context),
+                    tooltip: 'Add Tab',
+                    iconSize: 20,
+                  ),
+                ],
               );
             }),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 16),
+          // Timer display with icon
+          Obx(() {
+            final secs = controller.remainingSeconds.value;
+            final accent = _urgencyColor(context, secs);
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.access_time, color: accent, size: 18),
+                const SizedBox(width: 6),
+                Text(
+                  'Remaining: ${_formatRemaining(secs)}',
+                  style: TextStyle(
+                    color: accent,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            );
+          }),
+          const SizedBox(width: 16),
+          // Stop All button
           IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: () => _showAddTabDialog(context),
-            tooltip: 'Add Tab',
+            tooltip: 'Stop all',
+            icon: const Icon(Icons.stop_circle),
+            onPressed: controller.stopAll,
+            iconSize: 24,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMasterMonitor(BuildContext context) {
+    return Container(
+      width: 100,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        border: Border(
+          left: BorderSide(
+            color: Theme.of(context).colorScheme.outlineVariant,
+            width: 1,
+          ),
+        ),
+      ),
+      child: Column(
+        children: [
+          // Master label
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text(
+              'Master',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            ),
+          ),
+          // Vertical volume meter
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+              child: Obx(() {
+                // Get the current master volume/peak level
+                // For now, we'll use a simple calculation based on active handles
+                final activeCount =
+                    controller.audioService.activeHandles.length;
+                final level = activeCount > 0 ? 0.7 : 0.0; // Placeholder logic
+
+                return RotatedBox(
+                  quarterTurns: 3,
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 40,
+                      thumbShape: const RoundSliderThumbShape(
+                        enabledThumbRadius: 0,
+                      ),
+                      overlayShape: const RoundSliderOverlayShape(
+                        overlayRadius: 0,
+                      ),
+                      activeTrackColor: Colors.green,
+                      inactiveTrackColor: Colors.grey.shade300,
+                    ),
+                    child: Slider(
+                      value: level.clamp(0.0, 1.0),
+                      onChanged: null, // Read-only meter
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+          // Master volume control
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              children: [
+                const Icon(Icons.volume_up),
+                const SizedBox(height: 8),
+                Obx(() {
+                  final volume = controller.masterVolume.value;
+                  return RotatedBox(
+                    quarterTurns: 3,
+                    child: SizedBox(
+                      width: 120,
+                      child: SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          trackHeight: 4,
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 6,
+                          ),
+                        ),
+                        child: Slider(
+                          value: volume,
+                          onChanged: (v) => controller.updateMasterVolume(v),
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ],
+            ),
           ),
         ],
       ),
@@ -599,14 +685,11 @@ class HomeView extends GetView<HomeController> {
           ),
           onTap: () {
             // Slight delay to allow menu to close before showing dialog/popover
-            Future.delayed(
-              const Duration(milliseconds: 100),
-              () {
-                if (context.mounted) {
-                  _showRenameTabPopover(context, index, position);
-                }
-              },
-            );
+            Future.delayed(const Duration(milliseconds: 100), () {
+              if (context.mounted) {
+                _showRenameTabPopover(context, index, position);
+              }
+            });
           },
         ),
         PopupMenuItem(
@@ -618,14 +701,11 @@ class HomeView extends GetView<HomeController> {
             dense: true,
           ),
           onTap: () {
-            Future.delayed(
-              const Duration(milliseconds: 100),
-              () {
-                if (context.mounted) {
-                  _showDeleteTabConfirmation(context, index);
-                }
-              },
-            );
+            Future.delayed(const Duration(milliseconds: 100), () {
+              if (context.mounted) {
+                _showDeleteTabConfirmation(context, index);
+              }
+            });
           },
         ),
       ],
@@ -1250,7 +1330,9 @@ class HomeView extends GetView<HomeController> {
     // Blend base color towards white when playing for a clear visual change.
     final baseColor = color.withValues(alpha: hasFile ? 1 : 0.4);
     final playingColor = Color.fromARGB(255, 3, 165, 0); // Light Blue 300
-    final bgColor = isPlaying ? playingColor.withValues(alpha: 0.95) : baseColor;
+    final bgColor = isPlaying
+        ? playingColor.withValues(alpha: 0.95)
+        : baseColor;
 
     // Timer text
     String timerText = '';
@@ -1930,11 +2012,15 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
             children: [
               Text(
                 'L',
-                style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.7)),
+                style: TextStyle(
+                  color: scheme.onSurface.withValues(alpha: 0.7),
+                ),
               ),
               Text(
                 'R',
-                style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.7)),
+                style: TextStyle(
+                  color: scheme.onSurface.withValues(alpha: 0.7),
+                ),
               ),
             ],
           ),

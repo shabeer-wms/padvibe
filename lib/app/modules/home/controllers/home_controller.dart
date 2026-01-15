@@ -34,6 +34,7 @@ class HomeController extends GetxController {
   final pads = <Pad>[for (int i = 1; i <= 20; i++) Pad(name: 'Pad $i')].obs;
 
   final remainingSeconds = 0.0.obs;
+  final masterVolume = 1.0.obs; // Master volume control (0.0 to 1.0)
   Timer? _ticker;
 
   // Track the created timer window id to push updates
@@ -637,5 +638,13 @@ class HomeController extends GetxController {
 
   void updateRemoteEndpoint(String url) {
     localApiService.updateRemoteEndpoint(url);
+  }
+
+  // --- Master Volume ---
+  void updateMasterVolume(double volume) {
+    masterVolume.value = volume.clamp(0.0, 1.0);
+    // TODO: Implement setMasterVolume in audioService
+    // audioService.setMasterVolume(volume);
+    // Optionally persist this setting
   }
 }
