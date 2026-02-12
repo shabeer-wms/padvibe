@@ -3,10 +3,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:get/get.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as status;
 
 class SidecarService extends GetxService {
+  File? _logFile;
   final sidecarStatus = 'Not Started'.obs;
   final wsConnectionStatus = 'Disconnected'.obs;
   final lastError = ''.obs;
@@ -27,7 +29,35 @@ class SidecarService extends GetxService {
   @override
   void onInit() {
     super.onInit();
+    _initLogging();
     _startPythonSidecar();
+  }
+
+  Future<void> _initLogging() async {
+    try {
+      final appDir = await getApplicationSupportDirectory();
+      final logDir = Directory('${appDir.path}/logs');
+      if (!await logDir.exists()) {
+        await logDir.create(recursive: true);
+      }
+      _logFile = File('${logDir.path}/sidecar_${DateTime.now().millisecondsSinceEpoch}.log');
+      await _log('=== PadVibe Sidecar Log ===');
+      await _log('Platform: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}');
+      await _log('Executable: ${Platform.resolvedExecutable}');
+    } catch (e) {
+      debugPrint('Failed to initialize logging: $e');
+    }
+  }
+
+  Future<void> _log(String message) async {
+    final timestamp = DateTime.now().toIso8601String();
+    final logMessage = '[$timestamp] $message';
+    debugPrint(logMessage);
+    try {
+      await _logFile?.writeAsString('$logMessage\n', mode: FileMode.append);
+    } catch (e) {
+      debugPrint('Failed to write to log file: $e');
+    }
   }
 
   @override
@@ -74,24 +104,28 @@ class SidecarService extends GetxService {
   }
 
   Future<void> _startPythonSidecar() async {
-    debugPrint('Starting Python Sidecar...');
+    await _log('Starting Python Sidecar...');
     initStatusText.value = 'Cleaning up previous processes...';
     sidecarStatus.value = 'Starting';
     lastError.value = '';
 
     // Kill any process using port 8765
     try {
-      debugPrint('Checking for processes using port 8765...');
+      await _log('Checking for processes using port 8765...');
       if (Platform.isMacOS || Platform.isLinux) {
-        final result = await Process.run('lsof', ['-t', '-i:8765']);
-        final output = result.stdout.toString().trim();
+        // Use absolute paths for reliability
+        final lsofHeader = await Process.run('/usr/sbin/lsof', [
+          '-t',
+          '-i:8765',
+        ]);
+        final output = lsofHeader.stdout.toString().trim();
         if (output.isNotEmpty) {
           final pids = output.split('\n');
           for (final pid in pids) {
             if (pid.isNotEmpty) {
-              debugPrint('Killing process $pid using port 8765');
+              await _log('Killing process $pid using port 8765');
               initStatusText.value = 'Terminating stale process $pid...';
-              await Process.run('kill', ['-9', pid]);
+              await Process.run('/bin/kill', ['-9', pid]);
             }
           }
           await Future.delayed(const Duration(milliseconds: 500));
@@ -103,60 +137,151 @@ class SidecarService extends GetxService {
 
     initStatusText.value = 'Locating Sidecar binary...';
     try {
-      String executablePath;
+      String? executablePath;
+
       if (Platform.isMacOS) {
         final binDir = File(Platform.resolvedExecutable).parent;
         final bundleDir = binDir.parent;
-        executablePath =
-            '${bundleDir.path}/Frameworks/App.framework/Resources/flutter_assets/sidecar/dist/midi_server';
+        final assetPath = 'sidecar/dist/midi_server';
+
+        // Try multiple potential paths for robustness
+        final potentialPaths = [
+          '${bundleDir.path}/Frameworks/App.framework/Resources/flutter_assets/$assetPath',
+          '${bundleDir.path}/Frameworks/App.framework/Versions/Current/Resources/flutter_assets/$assetPath',
+          '${bundleDir.path}/Resources/flutter_assets/$assetPath',
+        ];
+
+        for (final path in potentialPaths) {
+          await _log('Checking path: $path');
+          if (await File(path).exists()) {
+            executablePath = path;
+            await _log('Found binary at: $path');
+            break;
+          }
+        }
       } else {
         executablePath = 'sidecar/dist/midi_server';
       }
 
-      if (await File(executablePath).exists()) {
-        debugPrint('Found sidecar binary at $executablePath');
+      if (executablePath != null && await File(executablePath).exists()) {
+        await _log('Found sidecar binary at $executablePath');
+        
+        // Check if file is executable
+        final stat = await File(executablePath).stat();
+        await _log('Binary permissions: ${stat.modeString()}');
+        
         initStatusText.value = 'Starting Sidecar binary...';
+
         if (Platform.isMacOS || Platform.isLinux) {
-          await Process.run('chmod', ['+x', executablePath]);
+          try {
+            final chmodResult = await Process.run('/bin/chmod', ['+x', executablePath]);
+            await _log('chmod result: exit=${chmodResult.exitCode}');
+          } catch (e) {
+            await _log('Chmod failed: $e');
+          }
         }
-        _pythonProcess = await Process.start(
-          executablePath,
-          [],
-          runInShell: false,
-        );
+
+        // Verify code signature on macOS
+        if (Platform.isMacOS) {
+          try {
+            final codesignResult = await Process.run('codesign', ['-dv', executablePath]);
+            await _log('Code signing status: ${codesignResult.stderr}');
+          } catch (e) {
+            await _log('Code signature check failed: $e');
+          }
+        }
+
+        try {
+          _pythonProcess = await Process.start(
+            executablePath,
+            [],
+            runInShell: false,
+          );
+        } catch (e) {
+          await _log('FATAL: Failed to start sidecar binary: $e');
+          throw Exception('Failed to start sidecar binary: $e');
+        }
       } else {
-        debugPrint('Sidecar binary not found. Trying python script fallback...');
-        initStatusText.value = 'Starting Python Sidecar engine...';
-        _pythonProcess = await Process.start('python3', [
-          'sidecar/midi_server.py',
-        ], runInShell: true);
+        // Fallback Logic - Try to find the script in assets if binary missing
+        debugPrint(
+          'Sidecar binary not found. Trying python script fallback...',
+        );
+        initStatusText.value = 'Binary missing. Trying Python...';
+
+        // Attempt to find absolute path to script in bundle
+        String? scriptPath;
+        if (Platform.isMacOS) {
+          final binDir = File(Platform.resolvedExecutable).parent;
+          final bundleDir = binDir.parent;
+          final scriptRel = 'sidecar/midi_server.py';
+          final potentialScripts = [
+            '${bundleDir.path}/Frameworks/App.framework/Resources/flutter_assets/$scriptRel',
+            '${bundleDir.path}/Resources/flutter_assets/$scriptRel',
+          ];
+          for (final p in potentialScripts) {
+            if (await File(p).exists()) {
+              scriptPath = p;
+              break;
+            }
+          }
+        } else {
+          scriptPath = 'sidecar/midi_server.py';
+        }
+
+        if (scriptPath != null) {
+          _pythonProcess = await Process.start('python3', [
+            scriptPath,
+          ], runInShell: true);
+        } else {
+          throw Exception(
+            'Could not locate sidecar binary OR python script in bundle.',
+          );
+        }
       }
 
       if (_pythonProcess != null) {
         sidecarPid.value = _pythonProcess!.pid;
-        debugPrint('Sidecar process started with PID: ${_pythonProcess!.pid}');
+        await _log('Sidecar process started with PID: ${_pythonProcess!.pid}');
         _startHealthCheck();
+
+        // Monitor for unexpected exit
+        _pythonProcess!.exitCode.then((code) async {
+          await _log('Sidecar process exited with code $code');
+          if (code != 0) {
+            sidecarStatus.value = 'Error';
+            final msg = 'Sidecar crashed (Code $code). Check logs at: ${_logFile?.path}';
+            if (lastError.value.isEmpty) {
+              lastError.value = msg;
+            }
+            initStatusText.value = msg;
+            await _log('FATAL ERROR: $msg');
+          } else {
+            sidecarStatus.value = 'Stopped';
+          }
+        });
       }
 
-      _pythonProcess?.stdout.transform(utf8.decoder).listen((data) {
-        debugPrint('SIDECAR OUT: $data');
+      _pythonProcess?.stdout.transform(utf8.decoder).listen((data) async {
+        await _log('SIDECAR OUT: $data');
       });
 
-      _pythonProcess?.stderr.transform(utf8.decoder).listen((data) {
-        debugPrint('SIDECAR ERR: $data');
+      _pythonProcess?.stderr.transform(utf8.decoder).listen((data) async {
+        await _log('SIDECAR ERR: $data');
         if (data.contains('ERROR') || data.contains('Error')) {
           lastError.value = data.trim();
         }
       });
 
       initStatusText.value = 'Waiting for Sidecar to initialize...';
-      await Future.delayed(const Duration(seconds: 3));
-      _connectToWebSocket(retries: 10);
-    } catch (e) {
-      debugPrint('Error starting Python sidecar: $e');
+      await Future.delayed(const Duration(seconds: 5));
+      _connectToWebSocket(retries: 20);
+    } catch (e, stackTrace) {
+      await _log('Error starting Python sidecar: $e');
+      await _log('Stack trace: $stackTrace');
       sidecarStatus.value = 'Error';
-      initStatusText.value = 'Initialization Error: ${e.toString()}';
-      lastError.value = e.toString();
+      final errorMsg = 'Initialization Error: ${e.toString()}\nLog: ${_logFile?.path}';
+      initStatusText.value = errorMsg;
+      lastError.value = errorMsg;
     }
   }
 
@@ -212,35 +337,38 @@ class SidecarService extends GetxService {
         },
       );
 
-            _isServerReady = true;
+      _isServerReady = true;
 
-            wsConnectionStatus.value = 'Connected';
+      wsConnectionStatus.value = 'Connected';
 
-            initStatusText.value = 'WebSocket Connected. Starting engines...';
+      initStatusText.value = 'WebSocket Connected. Starting engines...';
 
-            debugPrint('WebSocket connected!');
+      debugPrint('WebSocket connected!');
 
-            
+      // Allow a brief moment for other services to register their handlers and request data
 
-            // Allow a brief moment for other services to register their handlers and request data
+      // before marking initialization as complete for the splash screen.
 
-            // before marking initialization as complete for the splash screen.
+      Future.delayed(const Duration(milliseconds: 500), () {
+        initStatusText.value = 'System Ready.';
 
-            Future.delayed(const Duration(milliseconds: 500), () {
-
-              initStatusText.value = 'System Ready.';
-
-              isInitialized.value = true;
-
-            });
-
-            
-
-          } catch (e) {
+        isInitialized.value = true;
+      });
+    } catch (e) {
       debugPrint('Error connecting to WebSocket: $e');
       wsConnectionStatus.value = 'Error';
-      lastError.value = e.toString();
+
+      // Only overwrite lastError if it's not a critical sidecar crash
+      if (sidecarStatus.value != 'Error') {
+        lastError.value = e.toString();
+      }
+
       if (retries > 0) {
+        if (sidecarStatus.value == 'Error' ||
+            sidecarStatus.value == 'Stopped') {
+          initStatusText.value = 'Sidecar failed. Cannot connect.';
+          return; // Give up if sidecar is dead
+        }
         initStatusText.value = 'Retrying WebSocket ($retries)...';
         await Future.delayed(const Duration(seconds: 1));
         _connectToWebSocket(retries: retries - 1);

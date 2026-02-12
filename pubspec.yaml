@@ -74,6 +74,7 @@ flutter:
     - sidecar/midi_server.py
     - sidecar/audio_engine.py
     - sidecar/midi_engine.py
+    - sidecar/dist/midi_server
     - assets/logo/
 
   # An image asset can refer to one or more resolution-specific "variants", see

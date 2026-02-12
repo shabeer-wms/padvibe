@@ -18,4 +18,13 @@ echo "Building sidecar binary..."
 # --name: Name of the executable
 pyinstaller --onefile --distpath sidecar/dist --name midi_server --hidden-import='mido.backends.rtmidi' sidecar/midi_server.py
 
+# Ad-hoc sign the binary for macOS
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "Signing binary for macOS..."
+    codesign --force --deep --sign - sidecar/dist/midi_server
+    echo "Verifying signature..."
+    codesign --verify --verbose sidecar/dist/midi_server
+    echo "Code signature applied successfully"
+fi
+
 echo "Build complete. Binary is at sidecar/dist/midi_server"
