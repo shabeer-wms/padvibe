@@ -1,95 +1,81 @@
-# API Endpoint Design for PadVibe
+# PadVibe Local API Documentation
 
-This document outlines the proposed data structure for an API endpoint that exposes the current state of the PadVibe application, including pad details, playback status, and global timing information.
+PadVibe exposes a local HTTP API on port `9696` for external control and state monitoring.
 
-## Endpoint: `GET /api/v1/state`
+## State Endpoint
 
-**Description:** Retrieves the current snapshot of the application state.
+### `GET /state`
+Retrieves a full snapshot of the application state.
 
-### Response Body (JSON)
+### `GET /levels`
+Retrieves real-time master audio levels (RMS and Peak).
 
+### `GET /timer`
+Retrieves the current remaining countdown time.
+
+**Response Structure:**
+```json
+{
+  "remaining_seconds": 120.5,
+  "estimated_completion_timestamp": "2026-02-16T20:47:40.500Z"
+}
+```
+
+**Response Structure:**
+```json
+{
+  "rms_l": 0.12,
+  "rms_r": 0.11,
+  "peak_l": 0.45,
+  "peak_r": 0.43
+}
+```
+
+**Response Structure:**
 ```json
 {
   "global": {
     "remaining_timer_seconds": 120.5,
-    "estimated_completion_timestamp": "2025-11-20T20:47:40.500Z",
-    "master_volume_levels": {
-      "left": 0.45,
-      "right": 0.42
-    },
-    "active_group": {
-      "index": 0,
-      "id": "default",
-      "name": "Main Group"
-    }
+    "estimated_completion_timestamp": "2026-02-16T20:47:40.500Z",
+    "master_volume": 1.0,
+    "master_volume_levels": { "left": 0.45, "right": 0.42 },
+    "active_group": { "index": 0, "id": "...", "name": "Main" },
+    "audio_device": { "id": 1, "name": "Default Output" },
+    "midi_device": { "name": "Launchpad MK2" }
   },
   "pads": [
     {
       "id": 0,
-      "name": "Kick Drum",
-      "color": 4294967295, 
-      "file_path": "/path/to/kick.mp3",
-      "keyboard_shortcut": "A",
-      "settings": {
-        "is_looping": false
-      },
-      "playback": {
-        "state": "playing", 
-        "position_seconds": 1.2,
-        "duration_seconds": 2.5,
-        "progress_percent": 0.48
-      }
-    },
-    {
-      "id": 1,
-      "name": "Pad 2",
-      "color": 4289769157,
-      "file_path": null,
-      "keyboard_shortcut": null,
-      "settings": {
-        "is_looping": false
-      },
-      "playback": {
-        "state": "empty",
-        "position_seconds": 0.0,
-        "duration_seconds": 0.0,
-        "progress_percent": 0.0
-      }
+      "name": "Kick",
+      "color": 4294967295,
+      "file_path": "...",
+      "playback": { "state": "playing", "position_seconds": 1.2, ... }
     }
-    // ... up to 20 pads
   ]
 }
 ```
 
-## Field Descriptions
+## Control Endpoints (Simplified)
 
-### Global Object
-*   `remaining_timer_seconds`: (Float) The value of the global countdown timer.
-*   `estimated_completion_timestamp`: (String) ISO 8601 timestamp calculating when the timer will reach zero (Current Time + Remaining Seconds).
-*   `master_volume_levels`: (Object) Current RMS levels for audio visualization.
-    *   `left`: (Float) 0.0 to 1.0
-    *   `right`: (Float) 0.0 to 1.0
-*   `active_group`: (Object) Details about the currently selected pad group/tab.
+All control endpoints are accessible via `GET` for ease of use.
 
-### Pad Object
-*   `id`: (Integer) The index of the pad (0-19).
-*   `name`: (String) The display name of the pad.
-*   `color`: (Integer) The ARGB integer value of the pad's color.
-*   `file_path`: (String|Null) Absolute path to the assigned audio file. Null if empty.
-*   `keyboard_shortcut`: (String|Null) The assigned key (e.g., "A", "SPACE").
-*   `settings`:
-    *   `is_looping`: (Boolean) Whether the pad is set to loop.
-*   `playback`:
-    *   `state`: (String) One of: `"playing"`, `"paused"`, `"stopped"`, `"empty"`.
-    *   `position_seconds`: (Float) Current playback position.
-    *   `duration_seconds`: (Float) Total duration of the audio file.
-    *   `progress_percent`: (Float) 0.0 to 1.0 representing playback progress.
+### Pad Controls
+- `GET /play/<index>`: Toggle Play/Pause for pad at `<index>` (0-19).
+- `GET /stop/<index>`: Stop pad at `<index>`.
+- `GET /volume/pad/<index>/<value>`: Set pad volume (0.0 to 1.0).
+- `GET /seek/<index>/<value>`: Seek pad to position fraction (0.0 to 1.0).
 
-## Implementation Notes
+### Global Controls
+- `GET /stop_all`: Stop all currently playing pads.
+- `GET /volume/master/<value>`: Set master volume (0.0 to 1.0).
+- `GET /groups`: List all available pad groups/tabs.
+- `GET /groups/<index>/switch`: Switch to the specified group index.
+- `GET /faders`: List all volume faders.
+- `GET /volume/fader/<index>/<value>`: Set fader volume (0.0 to 1.0).
 
-To implement this, you would map the `HomeController` state to this JSON structure:
-
-1.  **Pads**: Iterate through `controller.pads`.
-2.  **Playback State**: Use `audioService.isPlaying(path)`, `isPaused(path)`, `getPosition(path)`, and `getLength(path)`.
-3.  **Global Timer**: Read `controller.remainingSeconds.value`.
-4.  **Master Levels**: Read `audioService.getMasterLevels()`.
+### Device Management
+- `GET /audio/devices`: List available audio output devices.
+- `GET /audio/devices/<id>/select`: Select audio output device by ID.
+- `GET /midi/devices`: List available MIDI input devices.
+- `GET /midi/devices/<name>/connect`: Connect to a MIDI device by name (URL encoded).
+- `GET /midi/refresh`: Refresh the MIDI device list.

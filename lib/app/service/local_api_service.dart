@@ -82,7 +82,28 @@ class LocalApiService extends GetxService {
   Future<void> _startServer() async {
     final router = Router();
 
-    router.get('/api/v1/state', _handleGetState);
+    router.get('/state', _handleGetState);
+    router.get('/levels', _handleGetLevels);
+    router.get('/timer', _handleGetTimer);
+    
+    // Simple Control Endpoints
+    router.get('/play/<index>', _handlePlay);
+    router.get('/stop/<index>', _handleStop);
+    router.get('/stop_all', _handleStopAll);
+    router.get('/volume/master/<value>', _handleMasterVolume);
+    router.get('/volume/pad/<index>/<value>', _handlePadVolume);
+    router.get('/volume/fader/<index>/<value>', _handleFaderVolume);
+    router.get('/seek/<index>/<value>', _handleSeekPad);
+    router.get('/groups', _handleGetGroups);
+    router.get('/groups/<index>/switch', _handleSwitchGroup);
+    router.get('/faders', _handleGetFaders);
+    
+    // Device Management Endpoints
+    router.get('/audio/devices', _handleGetAudioDevices);
+    router.get('/audio/devices/<id>/select', _handleSelectAudioDevice);
+    router.get('/midi/devices', _handleGetMidiDevices);
+    router.get('/midi/devices/<name>/connect', _handleConnectMidiDevice);
+    router.get('/midi/refresh', _handleRefreshMidiDevices);
 
     final handler = Pipeline()
         .addMiddleware(logRequests())
@@ -90,8 +111,6 @@ class LocalApiService extends GetxService {
         .addHandler(router.call);
 
     try {
-      // Listen on any interface (0.0.0.0) or loopback?
-      // 0.0.0.0 allows other devices on LAN to access it, which is often desired for "local API".
       _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, 9696);
       debugPrint('Local API Server listening on port ${_server!.port}');
     } catch (e) {
@@ -137,6 +156,179 @@ class LocalApiService extends GetxService {
       jsonEncode(json),
       headers: {'Content-Type': 'application/json'},
     );
+  }
+
+  Response _handleGetLevels(Request request) {
+    _audioService ??= Get.find<AudioPlayerService>();
+    final json = {
+      'rms_l': _audioService!.masterRmsL,
+      'rms_r': _audioService!.masterRmsR,
+      'peak_l': _audioService!.masterPeakL.value,
+      'peak_r': _audioService!.masterPeakR.value,
+    };
+    return Response.ok(
+      jsonEncode(json),
+      headers: {'Content-Type': 'application/json'},
+    );
+  }
+
+  Response _handleGetTimer(Request request) {
+    _homeController ??= Get.find<HomeController>();
+    final remaining = _homeController!.remainingSeconds.value;
+    final json = {
+      'remaining_seconds': remaining,
+      'estimated_completion_timestamp': DateTime.now()
+          .add(Duration(milliseconds: (remaining * 1000).toInt()))
+          .toIso8601String(),
+    };
+    return Response.ok(
+      jsonEncode(json),
+      headers: {'Content-Type': 'application/json'},
+    );
+  }
+
+  Future<Response> _handlePlay(Request request, String indexStr) async {
+    final index = int.tryParse(indexStr);
+    if (index == null) return Response.badRequest(body: 'Invalid index');
+    _homeController ??= Get.find<HomeController>();
+    await _homeController!.playPad(index);
+    return Response.ok('OK');
+  }
+
+  Future<Response> _handleStop(Request request, String indexStr) async {
+    final index = int.tryParse(indexStr);
+    if (index == null) return Response.badRequest(body: 'Invalid index');
+    _homeController ??= Get.find<HomeController>();
+    await _homeController!.stopPad(index);
+    return Response.ok('OK');
+  }
+
+  Future<Response> _handleStopAll(Request request) async {
+    _homeController ??= Get.find<HomeController>();
+    await _homeController!.stopAll();
+    return Response.ok('OK');
+  }
+
+  Response _handleMasterVolume(Request request, String valueStr) {
+    final value = double.tryParse(valueStr);
+    if (value == null) return Response.badRequest(body: 'Invalid value');
+    _homeController ??= Get.find<HomeController>();
+    _homeController!.updateMasterVolume(value);
+    return Response.ok('OK');
+  }
+
+  Response _handlePadVolume(Request request, String indexStr, String valueStr) {
+    final index = int.tryParse(indexStr);
+    final value = double.tryParse(valueStr);
+    if (index == null || value == null) return Response.badRequest(body: 'Invalid parameters');
+    _homeController ??= Get.find<HomeController>();
+    _homeController!.updatePadVolume(index, value);
+    return Response.ok('OK');
+  }
+
+  Response _handleFaderVolume(Request request, String indexStr, String valueStr) {
+    final index = int.tryParse(indexStr);
+    final value = double.tryParse(valueStr);
+    if (index == null || value == null) return Response.badRequest(body: 'Invalid parameters');
+    _homeController ??= Get.find<HomeController>();
+    _homeController!.updateFaderVolume(index, value);
+    return Response.ok('OK');
+  }
+
+  Future<Response> _handleSeekPad(Request request, String indexStr, String valueStr) async {
+    final index = int.tryParse(indexStr);
+    final value = double.tryParse(valueStr);
+    if (index == null || value == null) return Response.badRequest(body: 'Invalid parameters');
+    _homeController ??= Get.find<HomeController>();
+    await _homeController!.seekPad(index, value);
+    return Response.ok('OK');
+  }
+
+  Response _handleGetGroups(Request request) {
+    _homeController ??= Get.find<HomeController>();
+    final groups = _homeController!.groups.map((g) => {
+      'id': g.id,
+      'name': g.name,
+      'pad_count': g.pads.length,
+    }).toList();
+    return Response.ok(
+      jsonEncode(groups),
+      headers: {'Content-Type': 'application/json'},
+    );
+  }
+
+  Response _handleSwitchGroup(Request request, String indexStr) {
+    final index = int.tryParse(indexStr);
+    if (index == null) return Response.badRequest(body: 'Invalid index');
+    _homeController ??= Get.find<HomeController>();
+    _homeController!.switchTab(index);
+    return Response.ok('OK');
+  }
+
+  Response _handleGetFaders(Request request) {
+    _homeController ??= Get.find<HomeController>();
+    final faders = _homeController!.faders.map((f) => f.toJson()).toList();
+    return Response.ok(
+      jsonEncode(faders),
+      headers: {'Content-Type': 'application/json'},
+    );
+  }
+
+  Response _handleGetAudioDevices(Request request) {
+    _audioService ??= Get.find<AudioPlayerService>();
+    final devices = _audioService!.outputDevices.map((d) => {
+      'id': d.id,
+      'name': d.name,
+      'is_default': d.isDefault,
+      'is_selected': d.id == _audioService!.selectedDevice.value?.id,
+    }).toList();
+    return Response.ok(
+      jsonEncode(devices),
+      headers: {'Content-Type': 'application/json'},
+    );
+  }
+
+  Future<Response> _handleSelectAudioDevice(Request request, String idStr) async {
+    final id = int.tryParse(idStr);
+    if (id == null) return Response.badRequest(body: 'Invalid ID');
+    
+    _audioService ??= Get.find<AudioPlayerService>();
+    final device = _audioService!.outputDevices.firstWhereOrNull((d) => d.id == id);
+    if (device == null) return Response.notFound('Device not found');
+    
+    _homeController ??= Get.find<HomeController>();
+    await _homeController!.selectAudioDevice(device);
+    return Response.ok('OK');
+  }
+
+  Response _handleGetMidiDevices(Request request) {
+    final midiService = Get.find<MidiInterfaceService>();
+    final devices = midiService.devices.map((d) => {
+      'name': d.name,
+      'id': d.id,
+      'type': d.type,
+      'connected': d.name == midiService.connectedDevice.value?.name,
+    }).toList();
+    return Response.ok(
+      jsonEncode(devices),
+      headers: {'Content-Type': 'application/json'},
+    );
+  }
+
+  Response _handleConnectMidiDevice(Request request, String name) {
+    final midiService = Get.find<MidiInterfaceService>();
+    final decodedName = Uri.decodeComponent(name);
+    final device = midiService.devices.firstWhereOrNull((d) => d.name == decodedName);
+    if (device == null) return Response.notFound('Device not found');
+    
+    midiService.connect(device);
+    return Response.ok('OK');
+  }
+
+  Response _handleRefreshMidiDevices(Request request) {
+    final midiService = Get.find<MidiInterfaceService>();
+    midiService.refreshDevices();
+    return Response.ok('OK');
   }
 
   // --- Webhook Logic ---
@@ -196,6 +388,7 @@ class LocalApiService extends GetxService {
           )
           .toIso8601String(),
       'master_volume_levels': {'left': a.masterRmsL, 'right': a.masterRmsR},
+      'master_volume': c.masterVolume.value,
       'active_group': {
         'index': c.currentGroupIndex.value,
         'id': c.groups.isNotEmpty
@@ -204,6 +397,13 @@ class LocalApiService extends GetxService {
         'name': c.groups.isNotEmpty
             ? c.groups[c.currentGroupIndex.value].name
             : 'Default',
+      },
+      'audio_device': {
+        'id': a.selectedDevice.value?.id,
+        'name': a.selectedDevice.value?.name,
+      },
+      'midi_device': {
+        'name': Get.find<MidiInterfaceService>().connectedDevice.value?.name,
       },
     };
 
