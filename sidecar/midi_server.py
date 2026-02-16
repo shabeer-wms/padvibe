@@ -69,10 +69,11 @@ async def broadcast_levels():
 
 async def handle_websocket(websocket):
     """Handles incoming WebSocket connections and messages."""
-    print("Client connected")
+    print("Client connected", flush=True)
     clients.add(websocket)
     try:
         async for message in websocket:
+            print(f"DEBUG RECEIVED COMMAND: {message[:200]}", flush=True)
             try:
                 data = json.loads(message)
                 command = data.get("command")

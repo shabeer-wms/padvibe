@@ -419,6 +419,7 @@ class SidecarService extends GetxService {
   void send(String message) {
     if (_channel != null && _isServerReady) {
       try {
+        debugPrint('DEBUG SENDING: $message');
         _channel!.sink.add(message);
       } catch (e) {
         debugPrint('Error sending message to WebSocket: $e');

@@ -17,9 +17,7 @@ class AudioEngine:
     def list_devices(self):
         """Returns a list of available output devices."""
         try:
-            # Re-query devices to catch any hot-plugged ones
-            sd._terminate()
-            sd._initialize()
+            # query devices
             devices = sd.query_devices()
             hostapis = sd.query_hostapis()
             output_devices = []
