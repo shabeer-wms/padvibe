@@ -127,7 +127,52 @@ class StorageService extends GetxService {
     );
 
     await _ensureAudioDir();
+    await _migrateJsonToSqlite();
     return this;
+  }
+
+  Future<void> _migrateJsonToSqlite() async {
+    final appDir = await getApplicationSupportDirectory();
+    final jsonFile = File(p.join(appDir.path, 'pads.json'));
+    
+    if (!await jsonFile.exists()) return;
+    
+    // Check if we already have data in SQLite
+    final count = Sqflite.firstIntValue(await _db!.rawQuery('SELECT COUNT(*) FROM pad_groups'));
+    if (count != null && count > 0) return; // Already migrated
+    
+    try {
+      debugPrint('Migrating JSON data to SQLite...');
+      final content = await jsonFile.readAsString();
+      if (content.isEmpty) return;
+      final data = jsonDecode(content) as Map<String, dynamic>;
+      
+      // 1. Migrate Settings
+      if (data.containsKey('selectedAudioDeviceId')) await _saveSetting('selectedAudioDeviceId', data['selectedAudioDeviceId']);
+      if (data.containsKey('selectedAudioDeviceName')) await _saveSetting('selectedAudioDeviceName', data['selectedAudioDeviceName']);
+      if (data.containsKey('remoteEndpointUrl')) await _saveSetting('remoteEndpointUrl', data['remoteEndpointUrl']);
+      if (data.containsKey('webhookIntervalMs')) await _saveSetting('webhookIntervalMs', data['webhookIntervalMs']);
+      if (data.containsKey('gridColumns')) await _saveSetting('gridColumns', data['gridColumns']);
+      
+      // 2. Migrate Groups and Pads
+      List<PadGroup> groups = [];
+      if (data.containsKey('groups')) {
+        final list = (data['groups'] as List? ?? []);
+        groups = list.map((e) => PadGroup.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+      } else if (data.containsKey('pads')) {
+        final list = (data['pads'] as List? ?? []);
+        final pads = list.map((e) => Pad.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+        groups = [PadGroup(id: 'default', name: 'Default', pads: pads)];
+      }
+      
+      if (groups.isNotEmpty) {
+        await savePadGroups(groups);
+      }
+      
+      debugPrint('Migration complete.');
+    } catch (e) {
+      debugPrint('Migration error: $e');
+    }
   }
 
   Future<void> _saveSetting(String key, dynamic value) async {

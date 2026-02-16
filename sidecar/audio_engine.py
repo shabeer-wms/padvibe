@@ -229,19 +229,39 @@ class AudioEngine:
             try:
                 device_info = sd.query_devices(device_id, 'output')
                 max_ch = device_info['max_output_channels']
-            except:
-                max_ch = 2
+            except Exception as e:
+                print(f"DEBUG ENGINE: Invalid device_id {device_id}, falling back to default. Error: {e}", flush=True)
+                device_id = None # Fallback to default
+                try:
+                    device_info = sd.query_devices(None, 'output')
+                    max_ch = device_info['max_output_channels']
+                except:
+                    max_ch = 2
 
-            stream = sd.OutputStream(
-                device=device_id,
-                samplerate=f.samplerate,
-                channels=max_ch, # Always open all channels
-                callback=callback,
-                latency='low', 
-                blocksize=1024 
-            )
-            
-            stream.start()
+            try:
+                stream = sd.OutputStream(
+                    device=device_id,
+                    samplerate=f.samplerate,
+                    channels=max_ch, # Always open all channels
+                    callback=callback,
+                    latency='low', 
+                    blocksize=1024 
+                )
+                stream.start()
+            except Exception as e:
+                if device_id is not None:
+                    print(f"DEBUG ENGINE: Failed to start stream on device {device_id}, retrying on default device. Error: {e}", flush=True)
+                    stream = sd.OutputStream(
+                        device=None,
+                        samplerate=f.samplerate,
+                        channels=2, 
+                        callback=callback,
+                        latency='low', 
+                        blocksize=1024 
+                    )
+                    stream.start()
+                else:
+                    raise e
 
             with self.lock:
                 self.streams[stream_id] = {

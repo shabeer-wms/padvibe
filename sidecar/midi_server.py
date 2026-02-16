@@ -26,11 +26,14 @@ def watchdog():
     parent_pid = os.getppid()
     import time
     while True:
-        if os.getppid() != parent_pid:
-            # Parent changed or died
+        try:
+            # Check if parent process still exists
+            os.kill(parent_pid, 0)
+        except OSError:
+            # Parent process died
             cleanup()
             os._exit(0)
-        time.sleep(1)
+        time.sleep(2)
 
 async def broadcast(message):
     """Sends a message to all connected WebSocket clients."""
@@ -223,8 +226,10 @@ async def handle_websocket(websocket):
                 print(f"Error processing command: {e}")
                 await websocket.send(json.dumps({"type": "error", "message": str(e)}))
 
-    except websockets.exceptions.ConnectionClosed:
-        print("Client disconnected")
+    except websockets.exceptions.ConnectionClosed as e:
+        print(f"Client disconnected: {e.code} ({e.reason})", flush=True)
+    except Exception as e:
+        print(f"WebSocket error: {e}", flush=True)
     finally:
         if websocket in clients:
             clients.remove(websocket)
@@ -248,7 +253,13 @@ async def main():
     while port <= max_port:
         try:
             print(f"Starting WebSocket server on ws://127.0.0.1:{port}", flush=True)
-            async with websockets.serve(handle_websocket, "127.0.0.1", port):
+            async with websockets.serve(
+                handle_websocket, 
+                "127.0.0.1", 
+                port,
+                ping_interval=None,
+                ping_timeout=None
+            ):
                 print(f"PORT_BIND_SUCCESS:{port}", flush=True)
                 await asyncio.Future()  # Run forever
         except OSError as e:

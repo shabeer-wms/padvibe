@@ -10,6 +10,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 class HomeController extends GetxController {
   final audioService = Get.find<AudioPlayerService>();
@@ -221,22 +223,41 @@ class HomeController extends GetxController {
   Future<void> _sanitizeCurrentPads() async {
     bool changed = false;
     debugPrint('DEBUG: Starting pad path sanitization...');
+    
+    final appDir = await getApplicationSupportDirectory();
+    final audioLibDir = p.join(appDir.path, 'pads_audio');
+
     for (var i = 0; i < pads.length; i++) {
-      final p = pads[i].path;
-      if (p == null) continue;
-      final exists = kIsWeb ? true : File(p).existsSync();
-      debugPrint('DEBUG: Checking pad $i path: $p (Exists: $exists)');
-      if (!exists) {
+      final oldPath = pads[i].path;
+      if (oldPath == null) continue;
+      
+      var exists = kIsWeb ? true : File(oldPath).existsSync();
+      debugPrint('DEBUG: Checking pad $i path: $oldPath (Exists: $exists)');
+      
+      if (!exists && !kIsWeb) {
+        // Path broken. Try to relocate in local library
+        final fileName = p.basename(oldPath);
+        final localPath = p.join(audioLibDir, fileName);
+        if (File(localPath).existsSync()) {
+          debugPrint('DEBUG: Relocated pad $i to local path: $localPath');
+          pads[i] = pads[i].copyWith(path: localPath);
+          changed = true;
+          continue;
+        }
+        
         debugPrint('DEBUG: Path missing, clearing pad $i');
         pads[i] = pads[i].copyWith(path: null, clearPath: true);
         changed = true;
         continue;
       }
       if (!kIsWeb) {
-        final inLib = await storage.isInAudioLibrary(p);
+        final padPath = pads[i].path;
+        if (padPath == null) continue;
+        
+        final inLib = await storage.isInAudioLibrary(padPath);
         if (!inLib) {
           try {
-            final dst = await storage.importAudioFile(p);
+            final dst = await storage.importAudioFile(padPath);
             pads[i] = pads[i].copyWith(path: dst);
             changed = true;
           } catch (_) {

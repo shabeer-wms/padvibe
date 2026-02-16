@@ -84,23 +84,28 @@ class SidecarService extends GetxService {
     }
   }
 
+  int _healthCheckFailCount = 0;
+
   void _startHealthCheck() {
     _healthCheckTimer?.cancel();
+    _healthCheckFailCount = 0;
     _healthCheckTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       if (_pythonProcess != null) {
         try {
-          final result = Process.runSync('ps', [
-            '-p',
-            '${_pythonProcess!.pid}',
-          ]);
+          // Use 'kill -0' which is very fast and standard on Unix to check process existence
+          final result = Process.runSync('kill', ['-0', '${_pythonProcess!.pid}']);
           if (result.exitCode != 0) {
-            sidecarStatus.value = 'Stopped';
-            lastError.value = 'Sidecar process terminated unexpectedly';
+            _healthCheckFailCount++;
+            if (_healthCheckFailCount >= 2) {
+              sidecarStatus.value = 'Stopped';
+              lastError.value = 'Sidecar process terminated unexpectedly (Health check failed)';
+            }
           } else {
+            _healthCheckFailCount = 0;
             sidecarStatus.value = 'Running';
           }
         } catch (e) {
-          // ignore
+          // ignore or log
         }
       }
     });
