@@ -26,6 +26,8 @@ class SidecarService extends GetxService {
   Timer? _healthCheckTimer;
   int _discoveredPort = 8765; // Default port
 
+  int get lastDiscoveredPort => _discoveredPort;
+
   // Registered message handlers: type -> callback
   final Map<String, List<Function(Map<String, dynamic>)>> _handlers = {};
 

@@ -1929,6 +1929,7 @@ class HomeView extends GetView<HomeController> {
             ),
             const SizedBox(height: 8),
             Obx(() => _buildInfoTile('Status:', controller.sidecarService.sidecarStatus.value)),
+            Obx(() => _buildInfoTile('Port:', controller.sidecarService.lastDiscoveredPort.toString())),
             Obx(() => _buildInfoTile('WS:', controller.sidecarService.wsConnectionStatus.value)),
             Obx(() {
               final err = controller.sidecarService.lastError.value;

@@ -14,16 +14,22 @@ class AudioEngine:
         self.stream_levels = {}
         self.last_mix = np.zeros((1024, 2))
         self.mix_lock = threading.Lock()
+        self._initialized = False
 
-    def list_devices(self):
-        """Returns a list of available output devices."""
-        try:
-            # Re-query devices to catch any hot-plugged ones
+    def _ensure_initialized(self):
+        if not self._initialized:
             try:
                 sd._terminate()
                 sd._initialize()
-            except:
-                pass
+                self._initialized = True
+                print("DEBUG ENGINE: PortAudio Initialized", flush=True)
+            except Exception as e:
+                print(f"DEBUG ENGINE ERROR: Initialization failed: {e}", flush=True)
+
+    def list_devices(self):
+        """Returns a list of available output devices."""
+        self._ensure_initialized()
+        try:
             devices = sd.query_devices()
             hostapis = sd.query_hostapis()
             output_devices = []
@@ -45,6 +51,7 @@ class AudioEngine:
 
     def play(self, file_path, device_id=None, volume=1.0, loop=False, on_finished=None, output_channels=None, filter_type='none', filter_freq=20000):
         """Plays an audio file on a specific device."""
+        self._ensure_initialized()
         print(f"DEBUG ENGINE: Attempting to play {file_path} on device {device_id}", flush=True)
         try:
             if not os.path.exists(file_path):
@@ -382,74 +389,34 @@ class AudioEngine:
                 ctx["finished"] = False
 
     def get_waveform(self, file_path, points=100):
-        """Generates a simplified waveform for visualization."""
+        """Generates a simplified waveform using fast block-based reading."""
         try:
-            # Read file with soundfile
-            # Always read as mono for visualization to keep it simple
-            # If stereo, we can average channels or take max.
-            # Using soundfile directly to avoid overhead if not preloaded.
-            
             with sf.SoundFile(file_path) as f:
                 frames = f.frames
                 if frames == 0:
-                    return []
+                    return [], 0.0
                 
-                # Determine chunk size to get approx 'points' data points
-                step = max(1, frames // points)
+                # Determine block size
+                block_size = max(1, frames // points)
+                waveform = []
                 
-                # Read entire file into numpy array (if it fits in memory)
-                # For visualization, we might not need high precision.
-                # Reading whole file is fastest for numpy operations if size permits.
-                # 50MB file is fine. 500MB might be slow. 
-                # Let's try block reading for safety if file is huge, but for now
-                # let's assume reasonable sample sizes (< 5 mins).
+                # Read absolute max of each block
+                # This is extremely fast and light on memory
+                for _ in range(points):
+                    data = f.read(block_size, dtype='float32')
+                    if len(data) == 0:
+                        break
+                    # Peak of absolute values in this block
+                    val = np.max(np.abs(data))
+                    waveform.append(float(val))
                 
-                # Optimized approach: read the whole file, but if it's too large,
-                # we might want to read strided. 
-                # soundfile doesn't support strided read easily without reading blocks.
-                
-                # Let's read the whole file if < 10 minutes (approx 100MB @ 44.1/16/stereo).
-                # Actually, reading into float32 takes 4x space. 
-                # 1 min stereo = 10MB float32.
-                # 10 mins = 100MB. This is fine for desktop.
-                
-                data = f.read(dtype='float32')
-                
-                # Convert to mono if needed
-                if len(data.shape) > 1:
-                    # Average channels
-                    data = np.mean(data, axis=1)
-                
-                # Decimate / Resample
-                # Simple peak detection in chunks is better than just taking every Nth sample
-                # because we want to see transients.
-                # But calculating max of every chunk in python loop is slow.
-                # Numpy reshape trick:
-                
-                # Trim to multiple of 'points'
-                n_samples = len(data)
-                n_chunks = points
-                chunk_size = n_samples // n_chunks
-                
-                if chunk_size < 1:
-                    return data.tolist() # return all points if fewer than requested
-                
-                # Crop end
-                data = data[:n_chunks * chunk_size]
-                
-                # Reshape to (points, chunk_size)
-                reshaped = data.reshape(n_chunks, chunk_size)
-                
-                # Take absolute max of each chunk
-                waveform = np.max(np.abs(reshaped), axis=1)
-                
-                # Normalize (optional, but good for UI)
-                peak = np.max(waveform)
+                # Normalize
+                peak = max(waveform) if waveform else 0
                 if peak > 0:
-                    waveform /= peak
+                    waveform = [v / peak for v in waveform]
                 
                 duration = frames / f.samplerate
-                return waveform.tolist(), duration
+                return waveform, duration
 
         except Exception as e:
             print(f"Error generating waveform: {e}")
