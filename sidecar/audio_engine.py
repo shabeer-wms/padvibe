@@ -2,6 +2,7 @@ import sounddevice as sd
 import soundfile as sf
 import numpy as np
 import threading
+import os
 
 class AudioEngine:
     def __init__(self):

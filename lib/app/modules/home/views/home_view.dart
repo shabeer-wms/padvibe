@@ -1720,55 +1720,58 @@ class HomeView extends GetView<HomeController> {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        IconButton(
-                          icon: const Icon(
-                            Icons.replay,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                          onPressed: () => controller.restartPad(index),
-                          tooltip: 'Restart',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                        IconButton(
-                          icon: const Icon(
-                            Icons.replay_5,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                          onPressed: () => controller.skipBackward(index),
-                          tooltip: '-5s',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                        IconButton(
-                          icon: const Icon(
-                            Icons.forward_5,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                          onPressed: () => controller.skipForward(index),
-                          tooltip: '+5s',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                        if (isPlaying || isPaused)
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
                           IconButton(
                             icon: const Icon(
-                              Icons.stop,
+                              Icons.replay,
                               color: Colors.white,
                               size: 20,
                             ),
-                            onPressed: () => controller.stopPad(index),
-                            tooltip: 'Stop',
+                            onPressed: () => controller.restartPad(index),
+                            tooltip: 'Restart',
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(),
                           ),
-                      ],
+                          IconButton(
+                            icon: const Icon(
+                              Icons.replay_5,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                            onPressed: () => controller.skipBackward(index),
+                            tooltip: '-5s',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                          IconButton(
+                            icon: const Icon(
+                              Icons.forward_5,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                            onPressed: () => controller.skipForward(index),
+                            tooltip: '+5s',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                          if (isPlaying || isPaused)
+                            IconButton(
+                              icon: const Icon(
+                                Icons.stop,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                              onPressed: () => controller.stopPad(index),
+                              tooltip: 'Stop',
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                            ),
+                        ],
+                      ),
                     ),
                   ] else
                     const Padding(
