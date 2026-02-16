@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../../../data/pad_model.dart';
 import '../../../routes/app_pages.dart';
@@ -17,6 +18,7 @@ class SplashController extends GetxController {
   final loadedGroups = <PadGroup>[].obs;
   final loadedFaders = <Fader>[].obs;
   final loadedGridColumns = 5.obs;
+  final loadedThemeMode = 'ThemeMode.system'.obs;
   String? savedAudioDeviceName;
   int? savedAudioDeviceId;
 
@@ -60,6 +62,16 @@ class SplashController extends GetxController {
       final gridCols = await storage.getGridColumns();
       if (gridCols != null) {
         loadedGridColumns.value = gridCols;
+      }
+
+      final theme = await storage.getThemeMode();
+      if (theme != null) {
+        loadedThemeMode.value = theme;
+        // Apply theme early
+        Get.changeThemeMode(ThemeMode.values.firstWhere(
+          (e) => e.toString() == theme,
+          orElse: () => ThemeMode.system,
+        ));
       }
       await Future.delayed(const Duration(milliseconds: 200));
 
@@ -110,6 +122,7 @@ class SplashController extends GetxController {
           'groups': loadedGroups.toList(),
           'faders': loadedFaders.toList(),
           'gridColumns': loadedGridColumns.value,
+          'themeMode': loadedThemeMode.value,
           'savedAudioDeviceName': savedAudioDeviceName,
           'savedAudioDeviceId': savedAudioDeviceId,
         },

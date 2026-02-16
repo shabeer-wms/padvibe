@@ -83,7 +83,7 @@ async def handle_websocket(websocket):
 
                 # --- MIDI Commands ---
                 if command == "list_devices":
-                    devices = midi_engine.list_devices()
+                    devices = await asyncio.to_thread(midi_engine.list_devices)
                     await websocket.send(json.dumps({
                         "type": "device_list",
                         "devices": devices
@@ -92,7 +92,7 @@ async def handle_websocket(websocket):
                 elif command == "connect_device":
                     device_name = data.get("device_name")
                     try:
-                        midi_engine.connect(device_name)
+                        await asyncio.to_thread(midi_engine.connect, device_name)
                         await websocket.send(json.dumps({
                             "type": "status", 
                             "message": f"Connected to MIDI: {device_name}"
@@ -105,7 +105,7 @@ async def handle_websocket(websocket):
 
                 # --- Audio Commands ---
                 elif command == "list_audio_devices":
-                    devices = audio_engine.list_devices()
+                    devices = await asyncio.to_thread(audio_engine.list_devices)
                     await websocket.send(json.dumps({
                         "type": "audio_device_list",
                         "devices": devices
@@ -133,7 +133,8 @@ async def handle_websocket(websocket):
                                 loop_ref
                             )
 
-                        stream_id, duration = audio_engine.play(
+                        stream_id, duration = await asyncio.to_thread(
+                            audio_engine.play,
                             file_path, device_id, volume, loop,
                             on_finished=lambda: on_finished(stream_id),
                             output_channels=output_channels,
@@ -156,14 +157,14 @@ async def handle_websocket(websocket):
 
                 elif command == "stop_audio":
                     stream_id = data.get("stream_id")
-                    audio_engine.stop(stream_id)
+                    await asyncio.to_thread(audio_engine.stop, stream_id)
                     await websocket.send(json.dumps({
                         "type": "audio_stopped", 
                         "stream_id": stream_id
                     }))
 
                 elif command == "stop_all_audio":
-                    audio_engine.stop_all()
+                    await asyncio.to_thread(audio_engine.stop_all)
                     await websocket.send(json.dumps({
                         "type": "all_audio_stopped"
                     }))
@@ -201,7 +202,7 @@ async def handle_websocket(websocket):
                 elif command == "seek_audio":
                     stream_id = data.get("stream_id")
                     pos = data.get("position") # seconds
-                    audio_engine.seek(stream_id, pos)
+                    await asyncio.to_thread(audio_engine.seek, stream_id, pos)
 
                 elif command == "get_waveform":
                     file_path = data.get("file_path")

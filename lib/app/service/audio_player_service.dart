@@ -176,6 +176,13 @@ class AudioPlayerService extends GetxService {
     _activeStreams[streamId] = stream;
     _handlePath[streamId] = path;
     activeHandles.add(streamId);
+
+    // If we have a pending seek for this path (e.g. resuming from pause), apply it now
+    if (_inactiveSeekPositions.containsKey(path)) {
+      final pos = _inactiveSeekPositions[path]!;
+      _inactiveSeekPositions.remove(path);
+      seek(path, pos);
+    }
   }
 
   void _handleAudioLevels(Map<String, dynamic> event) {
@@ -194,6 +201,9 @@ class AudioPlayerService extends GetxService {
     }
   }
 
+  // Track pending waveform requests
+  final Map<String, Completer<void>> _pendingWaveforms = {};
+
   void _handleWaveformData(Map<String, dynamic> event) {
     final path = event['file_path'] as String;
     final data = (event['data'] as List).map((e) => (e as num).toDouble()).toList();
@@ -203,13 +213,35 @@ class AudioPlayerService extends GetxService {
       _fileDurations[path] = duration;
     }
     _waveformStreamController.add(path);
+    
+    // Complete pending future
+    if (_pendingWaveforms.containsKey(path)) {
+      _pendingWaveforms.remove(path)?.complete();
+    }
   }
 
   List<double>? getWaveform(String path) => _waveforms[path];
 
-  void loadWaveform(String path) {
+  Future<void> loadWaveform(String path) async {
     if (_waveforms.containsKey(path)) return; // Already loaded
+    
+    // If already requesting, return existing future
+    if (_pendingWaveforms.containsKey(path)) {
+      return _pendingWaveforms[path]!.future;
+    }
+
+    final completer = Completer<void>();
+    _pendingWaveforms[path] = completer;
+    
     _audioEngine.requestWaveform(path);
+    
+    // Safety timeout
+    return completer.future.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        _pendingWaveforms.remove(path);
+      },
+    );
   }
 
   Future<void> setRouting(String path, List<int>? channels) async {
@@ -269,6 +301,7 @@ class AudioPlayerService extends GetxService {
   }) async {
     await ensureInitialized();
     _pathIsBackground[path] = isBackground;
+    _pausedPaths.remove(path);
     
     // Default to selected device, or use the explicit deviceId passed
     final targetDeviceId = deviceId ?? selectedDevice.value?.id;
@@ -282,12 +315,8 @@ class AudioPlayerService extends GetxService {
       filterType: filterType,
       filterFrequency: filterFrequency,
     );
-
-    // Apply stored seek position if it exists
-    if (_inactiveSeekPositions.containsKey(path)) {
-      final pos = _inactiveSeekPositions.remove(path)!;
-      Future.delayed(const Duration(milliseconds: 100), () => seek(path, pos));
-    }
+    
+    // Resume logic is now handled in _handleAudioStarted
   }
 
   Future<void> setVolume(String path, double volume) async {
@@ -320,6 +349,8 @@ class AudioPlayerService extends GetxService {
     _activeStreams.clear();
     _handlePath.clear();
     activeHandles.clear();
+    _inactiveSeekPositions.clear();
+    _pausedPaths.clear();
   }
 
   Future<void> clearAll() async {
@@ -391,7 +422,7 @@ class AudioPlayerService extends GetxService {
     }
   }
 
-  Future<void> stopPath(String path) async {
+  Future<void> stopPath(String path, {bool isPausing = false}) async {
     // Find all streams with this path
     final streamIds = _activeStreams.values
         .where((s) => s.path == path)
@@ -401,6 +432,11 @@ class AudioPlayerService extends GetxService {
     for (final id in streamIds) {
       _audioEngine.stopAudio(id);
       _removeStream(id); // Optimistic UI update
+    }
+
+    if (!isPausing) {
+      _inactiveSeekPositions.remove(path);
+      _pausedPaths.remove(path);
     }
   }
 
@@ -416,19 +452,24 @@ class AudioPlayerService extends GetxService {
     // No-op
   }
 
-  // --- Pause/Resume not fully supported by Python sidecar yet, implemented as Stop/Play for now ---
-  // Or just no-op if complex
+  // Track paused paths: path -> paused position
+  final Map<String, Duration> _pausedPaths = {};
+
   Future<void> pausePath(String path) async {
-    await stopPath(path); // Simplification: Pause = Stop
+    if (isPlaying(path)) {
+      final pos = getPosition(path);
+      _inactiveSeekPositions[path] = pos;
+      _pausedPaths[path] = pos;
+      await stopPath(path, isPausing: true);
+    }
   }
 
   Future<void> resumePath(String path) async {
-    // Simplification: Resume = Play from start
-    playSound(path);
+    _pausedPaths.remove(path);
   }
 
   bool isPaused(String path) {
-    return false;
+    return _pausedPaths.containsKey(path);
   }
 
   Duration getPosition(String path) {

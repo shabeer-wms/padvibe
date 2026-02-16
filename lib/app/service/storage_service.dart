@@ -327,6 +327,14 @@ class StorageService extends GetxService {
     return val != null ? int.tryParse(val) : null;
   }
 
+  Future<void> saveThemeMode(String mode) async {
+    await _saveSetting('themeMode', mode);
+  }
+
+  Future<String?> getThemeMode() async {
+    return await _getSetting('themeMode');
+  }
+
   Future<void> clear() async {
     await _db?.delete('pad_groups');
     await _db?.delete('pads');

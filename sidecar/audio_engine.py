@@ -15,6 +15,7 @@ class AudioEngine:
         self.last_mix = np.zeros((1024, 2))
         self.mix_lock = threading.Lock()
         self._initialized = False
+        self.device_cache = {}
 
     def _ensure_initialized(self):
         if not self._initialized:
@@ -33,17 +34,24 @@ class AudioEngine:
             devices = sd.query_devices()
             hostapis = sd.query_hostapis()
             output_devices = []
+            new_cache = {}
             for i, dev in enumerate(devices):
                 if dev['max_output_channels'] > 0:
                     api_index = dev['hostapi']
                     api_name = hostapis[api_index]['name'] if api_index < len(hostapis) else str(api_index)
                     
-                    output_devices.append({
+                    dev_info = {
                         "id": i,
                         "name": dev['name'],
                         "hostapi": api_name,
                         "channels": dev['max_output_channels']
-                    })
+                    }
+                    output_devices.append(dev_info)
+                    new_cache[i] = dev_info
+            
+            with self.lock:
+                self.device_cache = new_cache
+                
             return output_devices
         except Exception as e:
             print(f"Error listing devices: {e}")
@@ -52,6 +60,26 @@ class AudioEngine:
     def play(self, file_path, device_id=None, volume=1.0, loop=False, on_finished=None, output_channels=None, filter_type='none', filter_freq=20000):
         """Plays an audio file on a specific device."""
         self._ensure_initialized()
+        
+        # Use cached device info if available
+        max_ch = 2
+        with self.lock:
+            if device_id is not None and device_id in self.device_cache:
+                max_ch = self.device_cache[device_id]['channels']
+            else:
+                try:
+                    target = device_id if device_id is not None else sd.default.device[1]
+                    if target in self.device_cache:
+                        max_ch = self.device_cache[target]['channels']
+                    else:
+                        info = sd.query_devices(target, 'output')
+                        max_ch = info['max_output_channels']
+                        self.device_cache[target] = {"channels": max_ch}
+                    if device_id is None:
+                        device_id = target
+                except:
+                    max_ch = 2
+
         print(f"DEBUG ENGINE: Attempting to play {file_path} on device {device_id}", flush=True)
         try:
             if not os.path.exists(file_path):
@@ -90,12 +118,14 @@ class AudioEngine:
                 "filter_type": filter_type,
                 "filter_freq": filter_freq,
                 "filter_state": None, # Will store [last_y_L, last_y_R]
-                "first_frame": True
+                "first_frame": True,
+                "fade_in_remaining": int(0.01 * f.samplerate), # 10ms fade-in
+                "fade_in_total": int(0.01 * f.samplerate)
             }
 
             def callback(outdata, frames, time, status):
                 if ctx["first_frame"]:
-                    print("DEBUG ENGINE: Audio callback is alive and running", flush=True)
+                    # print("DEBUG ENGINE: Audio callback is alive and running", flush=True)
                     ctx["first_frame"] = False
                 
                 if status:
@@ -159,6 +189,22 @@ class AudioEngine:
                 # Apply volume
                 if len(data_chunk) > 0:
                     data_chunk *= (ctx["volume"] * self.master_volume)
+
+                    # --- Fade In to prevent clicks ---
+                    if ctx["fade_in_remaining"] > 0:
+                        fade_len = min(len(data_chunk), ctx["fade_in_remaining"])
+                        # Linear ramp from current position to 1.0
+                        start_f = 1.0 - (ctx["fade_in_remaining"] / ctx["fade_in_total"])
+                        end_f = 1.0 - ((ctx["fade_in_remaining"] - fade_len) / ctx["fade_in_total"])
+                        ramp = np.linspace(start_f, end_f, fade_len, dtype='float32')
+                        
+                        if len(data_chunk.shape) > 1:
+                            for c in range(data_chunk.shape[1]):
+                                data_chunk[:fade_len, c] *= ramp
+                        else:
+                            data_chunk[:fade_len] *= ramp
+                        
+                        ctx["fade_in_remaining"] -= fade_len
 
                 # Assign to outdata with channel handling
                 outdata.fill(0) 
@@ -232,19 +278,6 @@ class AudioEngine:
                             ctx["on_finished"]()
                         raise sd.CallbackStop
 
-            # Determine device max channels
-            try:
-                device_info = sd.query_devices(device_id, 'output')
-                max_ch = device_info['max_output_channels']
-            except Exception as e:
-                print(f"DEBUG ENGINE: Invalid device_id {device_id}, falling back to default. Error: {e}", flush=True)
-                device_id = None # Fallback to default
-                try:
-                    device_info = sd.query_devices(None, 'output')
-                    max_ch = device_info['max_output_channels']
-                except:
-                    max_ch = 2
-
             try:
                 stream = sd.OutputStream(
                     device=device_id,
@@ -256,19 +289,16 @@ class AudioEngine:
                 )
                 stream.start()
             except Exception as e:
-                if device_id is not None:
-                    print(f"DEBUG ENGINE: Failed to start stream on device {device_id}, retrying on default device. Error: {e}", flush=True)
-                    stream = sd.OutputStream(
-                        device=None,
-                        samplerate=f.samplerate,
-                        channels=2, 
-                        callback=callback,
-                        latency='low', 
-                        blocksize=1024 
-                    )
-                    stream.start()
-                else:
-                    raise e
+                print(f"DEBUG ENGINE: Failed to start stream on device {device_id}, retrying on default device. Error: {e}", flush=True)
+                stream = sd.OutputStream(
+                    device=None,
+                    samplerate=f.samplerate,
+                    channels=2, 
+                    callback=callback,
+                    latency='low', 
+                    blocksize=1024 
+                )
+                stream.start()
 
             with self.lock:
                 self.streams[stream_id] = {

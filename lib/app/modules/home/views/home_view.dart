@@ -297,16 +297,16 @@ class HomeView extends GetView<HomeController> {
                               return CustomScrollView(
                                 slivers: [
                                   if (foregroundIndices.isNotEmpty) ...[
-                                    const SliverToBoxAdapter(
+                                    SliverToBoxAdapter(
                                       child: Padding(
-                                        padding: EdgeInsets.symmetric(vertical: 8.0),
+                                        padding: const EdgeInsets.symmetric(vertical: 8.0),
                                         child: Text(
                                           'FOREGROUND PADS',
                                           style: TextStyle(
                                             fontWeight: FontWeight.bold,
                                             letterSpacing: 1.2,
                                             fontSize: 12,
-                                            color: Colors.white70,
+                                            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
                                           ),
                                         ),
                                       ),
@@ -328,16 +328,16 @@ class HomeView extends GetView<HomeController> {
                                     ),
                                   ],
                                   if (backgroundIndices.isNotEmpty) ...[
-                                    const SliverToBoxAdapter(
+                                    SliverToBoxAdapter(
                                       child: Padding(
-                                        padding: EdgeInsets.only(top: 24.0, bottom: 8.0),
+                                        padding: const EdgeInsets.only(top: 24.0, bottom: 8.0),
                                         child: Text(
                                           'BACKGROUND PADS (API EXCLUDED)',
                                           style: TextStyle(
                                             fontWeight: FontWeight.bold,
                                             letterSpacing: 1.2,
                                             fontSize: 12,
-                                            color: Colors.white70,
+                                            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
                                           ),
                                         ),
                                       ),
@@ -1645,15 +1645,24 @@ class HomeView extends GetView<HomeController> {
                 ],
               ),
             ),
-            // Center: Icon (Play/Pause)
+            // Center: Icon (Play/Pause) or Loading Indicator
             Center(
-              child: Icon(
-                !hasFile
-                    ? Icons.add
-                    : (isPlaying && !isPaused ? Icons.pause : Icons.play_arrow),
-                color: Colors.white.withValues(alpha: 0.8),
-                size: 48,
-              ),
+              child: pad.isLoading
+                  ? const SizedBox(
+                      width: 48,
+                      height: 48,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 3,
+                      ),
+                    )
+                  : Icon(
+                      !hasFile
+                          ? Icons.add
+                          : (isPlaying && !isPaused ? Icons.pause : Icons.play_arrow),
+                      color: Colors.white.withValues(alpha: 0.8),
+                      size: 48,
+                    ),
             ),
             // Bottom: Controls & Info
             Positioned(
@@ -1901,6 +1910,25 @@ class HomeView extends GetView<HomeController> {
                 helperText: 'App will POST state here every 1s',
               ),
             ),
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 16),
+            const Text(
+              'Appearance',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Obx(() => SegmentedButton<ThemeMode>(
+              segments: const [
+                ButtonSegment(value: ThemeMode.system, label: Text('System'), icon: Icon(Icons.brightness_auto)),
+                ButtonSegment(value: ThemeMode.light, label: Text('Light'), icon: Icon(Icons.light_mode)),
+                ButtonSegment(value: ThemeMode.dark, label: Text('Dark'), icon: Icon(Icons.dark_mode)),
+              ],
+              selected: {controller.themeMode.value},
+              onSelectionChanged: (Set<ThemeMode> newSelection) {
+                controller.setThemeMode(newSelection.first);
+              },
+            )),
             const SizedBox(height: 24),
             const Divider(),
             const SizedBox(height: 16),

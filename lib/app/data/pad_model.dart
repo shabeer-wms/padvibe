@@ -12,6 +12,7 @@ class Pad {
   final List<int>? outputChannels; // Added for channel routing
   final String filterType; // 'none', 'lowpass', 'highpass'
   final double filterFrequency;
+  final bool isLoading;
 
   const Pad({
     required this.name,
@@ -27,6 +28,7 @@ class Pad {
     this.outputChannels,
     this.filterType = 'none',
     this.filterFrequency = 20000.0,
+    this.isLoading = false,
   });
 
   Pad copyWith({
@@ -43,6 +45,7 @@ class Pad {
     List<int>? outputChannels,
     String? filterType,
     double? filterFrequency,
+    bool? isLoading,
     bool clearPath = false,
     bool clearDeviceId = false,
     bool clearOutputChannels = false,
@@ -66,6 +69,7 @@ class Pad {
           clearOutputChannels ? null : (outputChannels ?? this.outputChannels),
       filterType: filterType ?? this.filterType,
       filterFrequency: filterFrequency ?? this.filterFrequency,
+      isLoading: isLoading ?? this.isLoading,
     );
   }
 
@@ -83,6 +87,7 @@ class Pad {
         'outputChannels': outputChannels,
         'filterType': filterType,
         'filterFrequency': filterFrequency,
+        // We don't persist isLoading state
       };
 
   factory Pad.fromJson(Map<String, dynamic> json) {
@@ -100,6 +105,7 @@ class Pad {
       outputChannels: (json['outputChannels'] as List?)?.cast<int>(),
       filterType: (json['filterType'] as String?) ?? 'none',
       filterFrequency: (json['filterFrequency'] as num?)?.toDouble() ?? 20000.0,
+      isLoading: false,
     );
   }
 }
