@@ -157,17 +157,13 @@ class HomeController extends GetxController {
       if (editingPadIndex.value != -1) return; // Ignore MIDI if editing name
 
       if (event.type == MidiEventType.noteOn) {
-        debugPrint(
-            'HomeController received MIDI Note Trigger: ID=${event.triggerId}');
         final index = pads.indexWhere((p) => p.midiNote == event.triggerId);
         if (index != -1) playPad(index);
       } else if (event.type == MidiEventType.controlChange) {
         // 1. Check if this CC is a Pad Trigger (Momentary CC)
         final triggerIndex = pads.indexWhere((p) => p.midiNote == event.triggerId);
         if (triggerIndex != -1) {
-          if (event.velocity > 0) {
-            playPad(triggerIndex);
-          }
+          if (event.velocity > 0) playPad(triggerIndex);
           return; // Stop processing if handled as trigger
         }
 

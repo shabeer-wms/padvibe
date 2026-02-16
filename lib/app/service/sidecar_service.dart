@@ -318,13 +318,13 @@ class SidecarService extends GetxService {
   }
 
   Future<void> _connectToWebSocket({int? port, int retries = 5}) async {
-    final targetPort = port ?? _discoveredPort;
-    debugPrint('Connecting to WebSocket on port $targetPort (Attempts left: $retries)...');
+    final int currentPort = port ?? _discoveredPort;
+    debugPrint('Connecting to WebSocket on port $currentPort (Attempts left: $retries)...');
     initStatusText.value = 'Establishing WebSocket connection...';
     wsConnectionStatus.value = 'Connecting';
 
     try {
-      final wsUrl = Uri.parse('ws://127.0.0.1:$targetPort');
+      final wsUrl = Uri.parse('ws://127.0.0.1:$currentPort');
       _channel = WebSocketChannel.connect(wsUrl);
 
       try {
@@ -351,34 +351,25 @@ class SidecarService extends GetxService {
             initStatusText.value = 'Connection failed, retrying ($retries)...';
             Future.delayed(
               const Duration(seconds: 1),
-              () => _connectToWebSocket(port: targetPort, retries: retries - 1),
+              () => _connectToWebSocket(port: currentPort, retries: retries - 1),
             );
           }
         },
       );
 
       _isServerReady = true;
-
       wsConnectionStatus.value = 'Connected';
-
       initStatusText.value = 'WebSocket Connected. Starting engines...';
-
       debugPrint('WebSocket connected!');
-
-      // Allow a brief moment for other services to register their handlers and request data
-
-      // before marking initialization as complete for the splash screen.
 
       Future.delayed(const Duration(milliseconds: 500), () {
         initStatusText.value = 'System Ready.';
-
         isInitialized.value = true;
       });
     } catch (e) {
       debugPrint('Error connecting to WebSocket: $e');
       wsConnectionStatus.value = 'Error';
 
-      // Only overwrite lastError if it's not a critical sidecar crash
       if (sidecarStatus.value != 'Error') {
         lastError.value = e.toString();
       }
@@ -387,11 +378,11 @@ class SidecarService extends GetxService {
         if (sidecarStatus.value == 'Error' ||
             sidecarStatus.value == 'Stopped') {
           initStatusText.value = 'Sidecar failed. Cannot connect.';
-          return; // Give up if sidecar is dead
+          return;
         }
         initStatusText.value = 'Retrying WebSocket ($retries)...';
         await Future.delayed(const Duration(seconds: 1));
-        _connectToWebSocket(port: targetPort, retries: retries - 1);
+        _connectToWebSocket(port: currentPort, retries: retries - 1);
       }
     }
   }
@@ -400,10 +391,6 @@ class SidecarService extends GetxService {
     try {
       final data = jsonDecode(message);
       final type = data['type'];
-
-      if (type == 'midi_message') {
-        debugPrint('RECEIVED MIDI: ${jsonEncode(data['message'])}');
-      }
 
       // Global status handling
       if (type == 'status') {

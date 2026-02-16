@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'dart:async'; // added
+import 'package:padvibe/app/core/utils/formatters.dart';
 import 'package:padvibe/app/data/pad_model.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
@@ -33,21 +34,7 @@ class HomeView extends GetView<HomeController> {
   // Added: API to get formatted timer text only
   static String getTimerTextOnly() {
     final secs = Get.find<HomeController>().remainingSeconds.value;
-    return _formatRemaining(secs);
-  }
-
-  // Changed: make formatter static so it can be used by the API
-  static String _formatRemaining(double secs) {
-    if (secs.isNaN || secs.isInfinite) return '00:00:000';
-    if (secs < 0) secs = 0;
-    final totalMs = (secs * 1000).round();
-    final mins = totalMs ~/ 60000;
-    final secInt = (totalMs % 60000) ~/ 1000;
-    final millis = (totalMs % 1000); // 3 digits (000-999)
-
-    String two(int n) => n.toString().padLeft(2, '0');
-    String three(int n) => n.toString().padLeft(3, '0');
-    return '${two(mins)}:${two(secInt)}:${three(millis)}';
+    return Formatters.formatRemaining(secs);
   }
 
   // Added: urgency color for timer
@@ -121,7 +108,7 @@ class HomeView extends GetView<HomeController> {
                                     .value;
                                 final accent = _urgencyColor(ctx, secs);
                                 final blinking = _blink(secs);
-                                final text = _formatRemaining(secs);
+                                final text = Formatters.formatRemaining(secs);
                                 final h = _timerOverlaySize.value.height;
                                 final fontSize = (h * 0.55).clamp(28.0, 220.0);
 
@@ -554,7 +541,7 @@ class HomeView extends GetView<HomeController> {
                 Icon(Icons.access_time, color: accent, size: 18),
                 const SizedBox(width: 6),
                 Text(
-                  'Remaining: ${_formatRemaining(secs)}',
+                  'Remaining: ${Formatters.formatRemaining(secs)}',
                   style: TextStyle(
                     color: accent,
                     fontSize: 14,
@@ -1480,7 +1467,7 @@ class HomeView extends GetView<HomeController> {
     if (hasFile && (isPlaying || isPaused)) {
       final pos = controller.audioService.getPosition(pad.path!);
       final len = controller.audioService.getLength(pad.path!);
-      timerText = '${_formatDuration(pos)} / ${_formatDuration(len)}';
+      timerText = '${Formatters.formatDuration(pos)} / ${Formatters.formatDuration(len)}';
     }
 
     // --- Waveform Data ---
@@ -1879,12 +1866,6 @@ class HomeView extends GetView<HomeController> {
     );
   }
 
-  String _formatDuration(Duration d) {
-    final m = d.inMinutes;
-    final s = d.inSeconds % 60;
-    return '$m:${s.toString().padLeft(2, '0')}';
-  }
-
   void _showSettingsDialog(BuildContext context) {
     final urlCtrl = TextEditingController(text: controller.remoteEndpointUrl);
     final localIp = controller.localApiService.localIp.value;
@@ -1929,7 +1910,7 @@ class HomeView extends GetView<HomeController> {
             ),
             const SizedBox(height: 8),
             Obx(() => _buildInfoTile('Status:', controller.sidecarService.sidecarStatus.value)),
-            Obx(() => _buildInfoTile('Port:', controller.sidecarService.lastDiscoveredPort.toString())),
+            _buildInfoTile('Port:', controller.sidecarService.lastDiscoveredPort.toString()),
             Obx(() => _buildInfoTile('WS:', controller.sidecarService.wsConnectionStatus.value)),
             Obx(() {
               final err = controller.sidecarService.lastError.value;

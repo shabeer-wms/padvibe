@@ -3,8 +3,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:padvibe/app/core/utils/formatters.dart';
 import 'package:padvibe/app/modules/home/controllers/home_controller.dart';
 import 'package:padvibe/app/service/audio_player_service.dart';
+import 'package:padvibe/app/service/midi_interface_service.dart';
 import 'package:padvibe/app/service/storage_service.dart';
 import 'package:get/get.dart' hide Response;
 import 'package:shelf/shelf.dart';
@@ -177,6 +179,7 @@ class LocalApiService extends GetxService {
     final remaining = _homeController!.remainingSeconds.value;
     final json = {
       'remaining_seconds': remaining,
+      'formatted_remaining_timer': Formatters.formatRemaining(remaining),
       'estimated_completion_timestamp': DateTime.now()
           .add(Duration(milliseconds: (remaining * 1000).toInt()))
           .toIso8601String(),
@@ -382,6 +385,7 @@ class LocalApiService extends GetxService {
     // Global
     final global = {
       'remaining_timer_seconds': c.remainingSeconds.value,
+      'formatted_remaining_timer': Formatters.formatRemaining(c.remainingSeconds.value),
       'estimated_completion_timestamp': DateTime.now()
           .add(
             Duration(milliseconds: (c.remainingSeconds.value * 1000).toInt()),
@@ -401,9 +405,6 @@ class LocalApiService extends GetxService {
       'audio_device': {
         'id': a.selectedDevice.value?.id,
         'name': a.selectedDevice.value?.name,
-      },
-      'midi_device': {
-        'name': Get.find<MidiInterfaceService>().connectedDevice.value?.name,
       },
     };
 
