@@ -24,6 +24,7 @@ class SidecarService extends GetxService {
   Process? _pythonProcess;
   bool _isServerReady = false;
   Timer? _healthCheckTimer;
+  int _discoveredPort = 8765; // Default port
 
   // Registered message handlers: type -> callback
   final Map<String, List<Function(Map<String, dynamic>)>> _handlers = {};
@@ -265,6 +266,15 @@ class SidecarService extends GetxService {
 
       _pythonProcess?.stdout.transform(utf8.decoder).listen((data) async {
         await _log('SIDECAR OUT: $data');
+        if (data.contains('PORT_BIND_SUCCESS:')) {
+          final portStr = data.split('PORT_BIND_SUCCESS:').last.trim();
+          final port = int.tryParse(portStr);
+          if (port != null) {
+            _discoveredPort = port;
+            await _log('Detected sidecar port: $_discoveredPort');
+            _connectToWebSocket(port: _discoveredPort, retries: 20);
+          }
+        }
       });
 
       _pythonProcess?.stderr.transform(utf8.decoder).listen((data) async {
@@ -276,8 +286,7 @@ class SidecarService extends GetxService {
       });
 
       initStatusText.value = 'Waiting for Sidecar to initialize...';
-      await Future.delayed(const Duration(seconds: 5));
-      _connectToWebSocket(retries: 20);
+      // No longer using fixed delay, waiting for PORT_BIND_SUCCESS signal
     } catch (e, stackTrace) {
       await _log('Error starting Python sidecar: $e');
       await _log('Stack trace: $stackTrace');
@@ -301,13 +310,14 @@ class SidecarService extends GetxService {
     });
   }
 
-  Future<void> _connectToWebSocket({int retries = 5}) async {
-    debugPrint('Connecting to WebSocket (Attempts left: $retries)...');
+  Future<void> _connectToWebSocket({int? port, int retries = 5}) async {
+    final targetPort = port ?? _discoveredPort;
+    debugPrint('Connecting to WebSocket on port $targetPort (Attempts left: $retries)...');
     initStatusText.value = 'Establishing WebSocket connection...';
     wsConnectionStatus.value = 'Connecting';
 
     try {
-      final wsUrl = Uri.parse('ws://127.0.0.1:8765');
+      final wsUrl = Uri.parse('ws://127.0.0.1:$targetPort');
       _channel = WebSocketChannel.connect(wsUrl);
 
       try {
@@ -334,7 +344,7 @@ class SidecarService extends GetxService {
             initStatusText.value = 'Connection failed, retrying ($retries)...';
             Future.delayed(
               const Duration(seconds: 1),
-              () => _connectToWebSocket(retries: retries - 1),
+              () => _connectToWebSocket(port: targetPort, retries: retries - 1),
             );
           }
         },
@@ -374,7 +384,7 @@ class SidecarService extends GetxService {
         }
         initStatusText.value = 'Retrying WebSocket ($retries)...';
         await Future.delayed(const Duration(seconds: 1));
-        _connectToWebSocket(retries: retries - 1);
+        _connectToWebSocket(port: targetPort, retries: retries - 1);
       }
     }
   }

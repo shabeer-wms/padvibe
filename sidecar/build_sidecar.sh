@@ -12,19 +12,22 @@ pip3 install -r sidecar/requirements.txt
 
 # Build the sidecar
 echo "Building sidecar binary..."
-# --onefile: Create a single executable
-# --noconsole: Don't show a console window (optional, maybe good for debugging to keep it for now, but for prod we might want it hidden. Let's keep console for now to see logs in Flutter)
-# --distpath: Output directory
-# --name: Name of the executable
-pyinstaller --onefile --distpath sidecar/dist --name midi_server --hidden-import='mido.backends.rtmidi' sidecar/midi_server.py
 
-# Ad-hoc sign the binary for macOS
+# Use PyInstaller's own target-arch if supported, otherwise build native
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo "Signing binary for macOS..."
+    # Clean old builds
+    rm -rf sidecar/dist build/midi_server
+    
+    # Just build native for now to ensure a working binary
+    echo "Building native binary..."
+    pyinstaller --onefile --distpath sidecar/dist --name midi_server --hidden-import='mido.backends.rtmidi' sidecar/midi_server.py
+    
+    echo "Signing binary..."
     codesign --force --deep --sign - sidecar/dist/midi_server
-    echo "Verifying signature..."
     codesign --verify --verbose sidecar/dist/midi_server
-    echo "Code signature applied successfully"
+else
+    # Non-macOS build
+    pyinstaller --onefile --distpath sidecar/dist --name midi_server --hidden-import='mido.backends.rtmidi' sidecar/midi_server.py
 fi
 
 echo "Build complete. Binary is at sidecar/dist/midi_server"

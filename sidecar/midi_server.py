@@ -242,9 +242,26 @@ async def main():
     # Start Audio Level Broadcast Task
     asyncio.create_task(broadcast_levels())
 
-    print("Starting WebSocket server on ws://127.0.0.1:8765", flush=True)
-    async with websockets.serve(handle_websocket, "127.0.0.1", 8765):
-        await asyncio.Future()  # Run forever
+    port = 8765
+    max_port = 8775
+    while port <= max_port:
+        try:
+            print(f"Starting WebSocket server on ws://127.0.0.1:{port}", flush=True)
+            async with websockets.serve(handle_websocket, "127.0.0.1", port):
+                print(f"PORT_BIND_SUCCESS:{port}", flush=True)
+                await asyncio.Future()  # Run forever
+        except OSError as e:
+            if e.errno == 48: # Address already in use
+                print(f"Port {port} in use, trying {port + 1}...")
+                port += 1
+            else:
+                print(f"Socket error: {e}")
+                raise e
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+            raise e
+    
+    print("Could not find an available port for WebSocket server.")
 
 if __name__ == "__main__":
     try:
