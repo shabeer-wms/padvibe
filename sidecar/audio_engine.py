@@ -17,7 +17,12 @@ class AudioEngine:
     def list_devices(self):
         """Returns a list of available output devices."""
         try:
-            # query devices
+            # Re-query devices to catch any hot-plugged ones
+            try:
+                sd._terminate()
+                sd._initialize()
+            except:
+                pass
             devices = sd.query_devices()
             hostapis = sd.query_hostapis()
             output_devices = []
@@ -39,9 +44,15 @@ class AudioEngine:
 
     def play(self, file_path, device_id=None, volume=1.0, loop=False, on_finished=None, output_channels=None, filter_type='none', filter_freq=20000):
         """Plays an audio file on a specific device."""
+        print(f"DEBUG ENGINE: Attempting to play {file_path} on device {device_id}", flush=True)
         try:
+            if not os.path.exists(file_path):
+                print(f"DEBUG ENGINE ERROR: File does not exist: {file_path}", flush=True)
+                raise FileNotFoundError(f"File not found: {file_path}")
+
             # Load file
             f = sf.SoundFile(file_path)
+            print(f"DEBUG ENGINE: File opened. SR={f.samplerate}, CH={f.channels}", flush=True)
             
             # Optimization: Read entire file into memory if < 20MB
             # 20MB is roughly 2 minutes of stereo 44.1kHz 16-bit audio
@@ -70,10 +81,15 @@ class AudioEngine:
                 "output_channels": output_channels,
                 "filter_type": filter_type,
                 "filter_freq": filter_freq,
-                "filter_state": None # Will store [last_y_L, last_y_R]
+                "filter_state": None, # Will store [last_y_L, last_y_R]
+                "first_frame": True
             }
 
             def callback(outdata, frames, time, status):
+                if ctx["first_frame"]:
+                    print("DEBUG ENGINE: Audio callback is alive and running", flush=True)
+                    ctx["first_frame"] = False
+                
                 if status:
                     print(f"Audio status: {status}")
                 

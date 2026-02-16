@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart';
 
 import 'package:get/get.dart';
 import 'package:padvibe/app/service/audio_engine_service.dart';
@@ -271,6 +272,7 @@ class AudioPlayerService extends GetxService {
     
     // Default to selected device, or use the explicit deviceId passed
     final targetDeviceId = deviceId ?? selectedDevice.value?.id;
+    debugPrint('DEBUG: audio_player_service sending play request to engine. Device: $targetDeviceId, Volume: $volume');
     _audioEngine.playAudio(
       path,
       deviceId: targetDeviceId,

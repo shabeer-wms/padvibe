@@ -220,12 +220,15 @@ class HomeController extends GetxController {
 
   Future<void> _sanitizeCurrentPads() async {
     bool changed = false;
+    debugPrint('DEBUG: Starting pad path sanitization...');
     for (var i = 0; i < pads.length; i++) {
       final p = pads[i].path;
       if (p == null) continue;
       final exists = kIsWeb ? true : File(p).existsSync();
+      debugPrint('DEBUG: Checking pad $i path: $p (Exists: $exists)');
       if (!exists) {
-        pads[i] = pads[i].copyWith(path: null);
+        debugPrint('DEBUG: Path missing, clearing pad $i');
+        pads[i] = pads[i].copyWith(path: null, clearPath: true);
         changed = true;
         continue;
       }
@@ -317,6 +320,7 @@ class HomeController extends GetxController {
   // --- Pad Actions ---
 
   Future<void> playPad(int index) async {
+    debugPrint('DEBUG: playPad called for index $index');
     final pad = pads[index];
     if (pad.path == null) return;
     final path = pad.path!;
