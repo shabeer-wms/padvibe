@@ -14,6 +14,8 @@ class SidecarService extends GetxService {
   final lastError = ''.obs;
   final sidecarPid = Rxn<int>();
 
+  String get logFilePath => _logFile?.path ?? 'No log file';
+
   // Initialization progress for splash screen
   final initStatusText = 'Initializing...'.obs;
   final isInitialized = false.obs;
@@ -242,17 +244,17 @@ class SidecarService extends GetxService {
       if (_pythonProcess != null) {
         sidecarPid.value = _pythonProcess!.pid;
         await _log('Sidecar process started with PID: ${_pythonProcess!.pid}');
+        await _log('Machine Architecture: ${Platform.version}'); // Logs some system info
         _startHealthCheck();
 
         // Monitor for unexpected exit
         _pythonProcess!.exitCode.then((code) async {
           await _log('Sidecar process exited with code $code');
+          sidecarPid.value = null;
           if (code != 0) {
             sidecarStatus.value = 'Error';
             final msg = 'Sidecar crashed (Code $code). Check logs at: ${_logFile?.path}';
-            if (lastError.value.isEmpty) {
-              lastError.value = msg;
-            }
+            lastError.value = 'Crashed with code $code. Check log file.';
             initStatusText.value = msg;
             await _log('FATAL ERROR: $msg');
           } else {
@@ -267,7 +269,8 @@ class SidecarService extends GetxService {
 
       _pythonProcess?.stderr.transform(utf8.decoder).listen((data) async {
         await _log('SIDECAR ERR: $data');
-        if (data.contains('ERROR') || data.contains('Error')) {
+        // Capture ANY stderr as potential error if sidecar is not initialized
+        if (!isInitialized.value) {
           lastError.value = data.trim();
         }
       });

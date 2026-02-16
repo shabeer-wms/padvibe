@@ -1917,6 +1917,27 @@ class HomeView extends GetView<HomeController> {
                 helperText: 'App will POST state here every 1s',
               ),
             ),
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 16),
+            const Text(
+              'Sidecar Diagnostics',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Obx(() => _buildInfoTile('Status:', controller.sidecarService.sidecarStatus.value)),
+            Obx(() => _buildInfoTile('WS:', controller.sidecarService.wsConnectionStatus.value)),
+            Obx(() {
+              final err = controller.sidecarService.lastError.value;
+              return err.isNotEmpty 
+                ? _buildInfoTile('Last Error:', err)
+                : const SizedBox.shrink();
+            }),
+            _buildInfoTile(
+              'Logs:', 
+              controller.sidecarService.logFilePath,
+              isCopyable: true,
+            ),
           ],
         ),
         actions: [
