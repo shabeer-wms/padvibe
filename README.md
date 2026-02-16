@@ -14,9 +14,10 @@
 PadVibe employs a unique **Dual-Engine Architecture**. While Flutter handles the complex UI and state management, a dedicated Python process (the "Sidecar") manages the heavy lifting of audio and MIDI.
 
 ### 🔌 Communication Flow
-1.  **Flutter (Client):** Sends JSON commands via **WebSockets** (Port 8765).
-2.  **Python Sidecar (Server):** Executes audio playback, DSP, and MIDI polling.
-3.  **Real-time Feedback:** The Sidecar streams 20FPS audio levels (RMS/Peak) and MIDI events back to Flutter for immediate UI updates.
+1.  **Flutter (Client):** Sends JSON commands via **WebSockets**.
+2.  **Dynamic Port Discovery:** The Sidecar automatically finds an available port (8765-8775) and broadcasts it to Flutter for a seamless handshake.
+3.  **Python Sidecar (Server):** Executes audio playback, DSP, and MIDI polling.
+4.  **Real-time Feedback:** The Sidecar streams audio levels (RMS/Peak) and MIDI events back to Flutter for immediate UI updates.
 
 ---
 
@@ -28,17 +29,21 @@ PadVibe employs a unique **Dual-Engine Architecture**. While Flutter handles the
 - **Soft Limiter:** Integrated `tanh` soft-knee limiting on the master bus to prevent digital clipping.
 - **Waveform Visualization:** High-fidelity waveform generation for every sample.
 - **Professional Metering:** L/R channel independent RMS and Peak meters with ballistics and peak-hold.
+- **Heartbeat System:** Constant 60FPS UI updates ensure progress bars and spectrum monitors remain fluid, even for background tasks.
 
 ### 🎹 MIDI & Control
-- **MIDI Learn:** Map any pad to any MIDI note on your external controllers.
+- **RODECaster Pro Support:** Advanced MIDI handling with a unique Trigger ID system that supports channel-specific messages (essential for RODECaster pads).
+- **Mixer Panel:** Create multiple software faders, link them to groups of pads, and control them all via a single physical MIDI slider.
+- **MIDI Learn:** Map any pad or mixer fader to any MIDI note or CC on your external controllers.
 - **Keyboard Shortcuts:** Global and local hotkeys for instant triggering.
 - **Local API:** Built-in HTTP server (Port 9696) and Webhooks allow external software to monitor and control PadVibe's state.
 
 ### 🖥️ UX & Workflow
 - **Tabbed Layouts:** Organize your performance into multiple groups/banks.
+- **Background Pads:** Mark pads as "Background" to exclude them from API states and the Master Timer—perfect for ambient beds or long-running backing tracks.
 - **Drag & Drop:** Instant sample loading by dropping files onto pads.
 - **Multi-Window:** Detachable timer overlay for performance tracking.
-- **Smart Storage:** Automatically imports and manages audio files in a local library.
+- **SQLite Storage:** Robust data persistence for all pads, groups, mixer settings, and preferences.
 
 ---
 
@@ -48,14 +53,15 @@ PadVibe employs a unique **Dual-Engine Architecture**. While Flutter handles the
 padvibe/
 ├── lib/                        # Flutter Application
 │   ├── app/
-│   │   ├── data/               # Models (Pad, PadGroup)
+│   │   ├── data/               # Models (Pad, PadGroup, Fader)
 │   │   ├── modules/            # UI Modules (Home, Splash, Timer)
 │   │   ├── routes/             # GetX Routing
 │   │   └── service/            # Core Services
 │   │       ├── audio_engine_service.dart   # WS Communication
 │   │       ├── audio_player_service.dart   # High-level Logic
 │   │       ├── midi_interface_service.dart # MIDI Logic
-│   │       └── sidecar_service.dart        # Process Management
+│   │       ├── sidecar_service.dart        # Process Management
+│   │       └── storage_service.dart        # SQLite Persistence
 │   └── main.dart               # Entry point
 ├── sidecar/                    # Python Audio/MIDI Engine
 │   ├── audio_engine.py         # sounddevice/numpy DSP & Playback
@@ -96,8 +102,6 @@ padvibe/
     flutter run
     ```
 
-> **Note:** On the first run, the app will attempt to start the Python sidecar using `python3 sidecar/midi_server.py`. For production, the sidecar should be built using `sidecar/build_sidecar.sh`.
-
 ---
 
 ## 🛠️ Tech Stack
@@ -108,17 +112,7 @@ padvibe/
 | **Backend** | Python 3, Websockets (asyncio) |
 | **Audio** | sounddevice, soundfile, NumPy (DSP) |
 | **MIDI** | mido, python-rtmidi |
-| **Storage** | path_provider, JSON-based persistence |
-
----
-
-## 📸 Screenshots
-
-![Main Interface](assets/screenshots/padvibe_macos.png)
-*Professional Pad Grid with Real-time Waveforms*
-
-![Master Meter](assets/screenshots/padvibe_macos_2.png)
-*High-precision L/R Metering and Master Fader*
+| **Storage** | SQLite (sqflite_common_ffi), Persistence |
 
 ---
 
