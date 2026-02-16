@@ -282,6 +282,7 @@ class HomeView extends GetView<HomeController> {
                     child: Obx(() {
                       // Read the ticker to trigger rebuilds for progress bars.
                       controller.remainingSeconds.value;
+                      controller.heartbeat.value; // Ensures background pads update too
                       // Also observe active handles for immediate play/pause updates
                       controller.audioService.activeHandles.length;
                       // Also observe manual force updates (e.g. seeking while paused)
@@ -295,73 +296,82 @@ class HomeView extends GetView<HomeController> {
                               final cols = controller.gridColumns.value;
                               final childAspect = 4 / 3;
 
-                              return GridView.builder(
-                                itemCount: controller.pads.length,
-                                gridDelegate:
-                                    SliverGridDelegateWithFixedCrossAxisCount(
-                                      crossAxisCount: cols,
-                                      mainAxisSpacing: spacing,
-                                      crossAxisSpacing: spacing,
-                                      childAspectRatio: childAspect,
-                                    ),
-                                itemBuilder: (context, index) {
-                                  final pad = controller.pads[index].obs;
-                                  final color = colors[index % colors.length];
-                                  final hasFile = pad.value.path != null;
-                                  final fileName = hasFile
-                                      ? pad.value.path!.split('/').last
-                                      : 'Empty';
+                              final foregroundIndices = <int>[];
+                              final backgroundIndices = <int>[];
 
-                                  return Obx(
-                                    () => DropTarget(
-                                      onDragDone: (detail) {
-                                        if (detail.files.isEmpty) return;
-                                        final f = detail.files.first;
-                                        if (!f.name.toLowerCase().endsWith(
-                                              '.mp3',
-                                            ) &&
-                                            !f.name.toLowerCase().endsWith(
-                                              '.wav',
-                                            ) &&
-                                            !f.name.toLowerCase().endsWith(
-                                              '.ogg',
-                                            ) &&
-                                            !f.name.toLowerCase().endsWith(
-                                              '.flac',
-                                            ) &&
-                                            !f.name.toLowerCase().endsWith(
-                                              '.aac',
-                                            ) &&
-                                            !f.name.toLowerCase().endsWith(
-                                              '.m4a',
-                                            )) {
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text(
-                                                'Unsupported file type: ${f.name}',
-                                              ),
-                                            ),
-                                          );
-                                          return;
-                                        }
-                                        controller.assignFilePathToPad(
-                                          index,
-                                          f.path,
-                                        );
-                                      },
-                                      child: _pad(
-                                        color,
-                                        hasFile,
-                                        index,
-                                        pad.value,
-                                        fileName,
-                                        context,
+                              for (int i = 0; i < controller.pads.length; i++) {
+                                if (controller.pads[i].isBackground) {
+                                  backgroundIndices.add(i);
+                                } else {
+                                  foregroundIndices.add(i);
+                                }
+                              }
+
+                              return CustomScrollView(
+                                slivers: [
+                                  if (foregroundIndices.isNotEmpty) ...[
+                                    const SliverToBoxAdapter(
+                                      child: Padding(
+                                        padding: EdgeInsets.symmetric(vertical: 8.0),
+                                        child: Text(
+                                          'FOREGROUND PADS',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            letterSpacing: 1.2,
+                                            fontSize: 12,
+                                            color: Colors.white70,
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                  );
-                                },
+                                    SliverGrid(
+                                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: cols,
+                                        mainAxisSpacing: spacing,
+                                        crossAxisSpacing: spacing,
+                                        childAspectRatio: childAspect,
+                                      ),
+                                      delegate: SliverChildBuilderDelegate(
+                                        (context, i) {
+                                          final index = foregroundIndices[i];
+                                          return _buildPadItem(context, index, colors);
+                                        },
+                                        childCount: foregroundIndices.length,
+                                      ),
+                                    ),
+                                  ],
+                                  if (backgroundIndices.isNotEmpty) ...[
+                                    const SliverToBoxAdapter(
+                                      child: Padding(
+                                        padding: EdgeInsets.only(top: 24.0, bottom: 8.0),
+                                        child: Text(
+                                          'BACKGROUND PADS (API EXCLUDED)',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            letterSpacing: 1.2,
+                                            fontSize: 12,
+                                            color: Colors.white70,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    SliverGrid(
+                                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: cols,
+                                        mainAxisSpacing: spacing,
+                                        crossAxisSpacing: spacing,
+                                        childAspectRatio: childAspect,
+                                      ),
+                                      delegate: SliverChildBuilderDelegate(
+                                        (context, i) {
+                                          final index = backgroundIndices[i];
+                                          return _buildPadItem(context, index, colors);
+                                        },
+                                        childCount: backgroundIndices.length,
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               );
                             });
                           },
@@ -380,6 +390,42 @@ class HomeView extends GetView<HomeController> {
     ),
   );
 }
+
+  Widget _buildPadItem(BuildContext context, int index, List<Color> colors) {
+    final pad = controller.pads[index].obs;
+    final color = colors[index % colors.length];
+    final hasFile = pad.value.path != null;
+    final fileName = hasFile ? pad.value.path!.split('/').last : 'Empty';
+
+    return Obx(
+      () => DropTarget(
+        onDragDone: (detail) {
+          if (detail.files.isEmpty) return;
+          final f = detail.files.first;
+          if (!f.name.toLowerCase().endsWith('.mp3') &&
+              !f.name.toLowerCase().endsWith('.wav') &&
+              !f.name.toLowerCase().endsWith('.ogg') &&
+              !f.name.toLowerCase().endsWith('.flac') &&
+              !f.name.toLowerCase().endsWith('.aac') &&
+              !f.name.toLowerCase().endsWith('.m4a')) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Unsupported file type: ${f.name}')),
+            );
+            return;
+          }
+          controller.assignFilePathToPad(index, f.path);
+        },
+        child: _pad(
+          color,
+          hasFile,
+          index,
+          pad.value,
+          fileName,
+          context,
+        ),
+      ),
+    );
+  }
 
   AppBar _appBar(BuildContext context) {
     return AppBar(
@@ -534,7 +580,7 @@ class HomeView extends GetView<HomeController> {
 
   Widget _buildMasterMonitor(BuildContext context) {
     return Container(
-      width: 140,
+      width: 320,
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border(
@@ -544,8 +590,17 @@ class HomeView extends GetView<HomeController> {
           ),
         ),
       ),
-      child: Center(
-        child: _MasterAudioMeter(controller: controller),
+      child: Row(
+        children: [
+          Expanded(
+            child: _MixerPanel(
+              controller: controller,
+              onAddFader: () => _showAddFaderDialog(context),
+              onFaderSettings: (index) => _showFaderSettings(context, index),
+            ),
+          ),
+          _MasterAudioMeter(controller: controller),
+        ],
       ),
     );
   }
@@ -903,6 +958,52 @@ class HomeView extends GetView<HomeController> {
     );
   }
 
+  void _showPadVolumeSettings(int index) {
+    Get.dialog(
+      AlertDialog(
+        title: const Text('Individual Pad Volume'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Obx(() {
+              final pad = controller.pads[index];
+              return Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Volume:'),
+                      Text('${(pad.volume * 100).toInt()}%'),
+                    ],
+                  ),
+                  Slider(
+                    value: pad.volume,
+                    onChanged: (val) => controller.updatePadVolume(index, val),
+                  ),
+                  if (pad.faderId != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Text(
+                        'Note: Linked to Mixer Fader',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Theme.of(Get.context!).colorScheme.secondary,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            }),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: Get.back, child: const Text('Done')),
+        ],
+      ),
+    );
+  }
+
   void _showMidiLearnDialog(int padIndex) {
     StreamSubscription? sub;
     Get.dialog(
@@ -919,7 +1020,7 @@ class HomeView extends GetView<HomeController> {
                 return Column(
                   children: [
                     Text(
-                      'Current: Note $current',
+                      'Current: ${MidiNoteEvent.getDisplayNameForId(current)}',
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
@@ -951,8 +1052,16 @@ class HomeView extends GetView<HomeController> {
     ).then((_) => sub?.cancel());
 
     sub = controller.midiService.noteStream.listen((event) {
+      bool isTrigger = false;
       if (event.type == MidiEventType.noteOn) {
-        controller.assignMidiNote(padIndex, event.note);
+        isTrigger = true;
+      } else if (event.type == MidiEventType.controlChange &&
+          event.velocity > 0) {
+        isTrigger = true;
+      }
+
+      if (isTrigger) {
+        controller.assignMidiNote(padIndex, event.triggerId);
         sub?.cancel();
         if (Get.isDialogOpen ?? false) Get.back();
       }
@@ -1006,6 +1115,38 @@ class HomeView extends GetView<HomeController> {
           ),
         ),
         const PopupMenuItem(
+          value: 'vol_midi',
+          child: ListTile(
+            leading: Icon(Icons.volume_up),
+            title: Text('Individual Volume'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+        PopupMenuItem(
+          value: 'background',
+          child: ListTile(
+            leading: Icon(
+              controller.pads[index].isBackground
+                  ? Icons.check_box
+                  : Icons.check_box_outline_blank,
+            ),
+            title: const Text('Background Pad'),
+            subtitle: const Text('Exclude from Local API'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'mixer',
+          child: ListTile(
+            leading: Icon(Icons.linear_scale),
+            title: Text('Mixer Fader'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ),
+        const PopupMenuItem(
           value: 'routing',
           child: ListTile(
             leading: Icon(Icons.router),
@@ -1038,10 +1179,78 @@ class HomeView extends GetView<HomeController> {
       if (value == 'rename') controller.startRenamingPad(index);
       if (value == 'keyboard') _showKeyboardShortcutDialog(index);
       if (value == 'midi') _showMidiLearnDialog(index);
+      if (value == 'vol_midi') _showPadVolumeSettings(index);
+      if (value == 'background') controller.toggleBackground(index);
+      if (value == 'mixer') _showFaderAssignmentDialog(index);
       if (value == 'routing') _showAudioRoutingDialog(index);
       if (value == 'filters') _showFilterDialog(index);
       if (value == 'clear') controller.clearPad(index);
     });
+  }
+
+  void _showFaderAssignmentDialog(int index) {
+    Get.dialog(
+      AlertDialog(
+        title: const Text('Assign to Mixer Fader'),
+        content: SizedBox(
+          width: 300,
+          child: Obx(() {
+            if (controller.faders.isEmpty) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('No faders created yet.'),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () {
+                      Get.back();
+                      _showAddFaderDialog(Get.context!);
+                    },
+                    child: const Text('Create Fader'),
+                  ),
+                ],
+              );
+            }
+
+            final currentFaderId = controller.pads[index].faderId;
+
+            return ListView.builder(
+              shrinkWrap: true,
+              itemCount: controller.faders.length + 1,
+              itemBuilder: (ctx, i) {
+                if (i == 0) {
+                  return ListTile(
+                    title: const Text('None (Individual Volume)'),
+                    trailing: currentFaderId == null
+                        ? const Icon(Icons.check, color: Colors.green)
+                        : null,
+                    onTap: () {
+                      controller.assignPadToFader(index, null);
+                      Get.back();
+                    },
+                  );
+                }
+                final fader = controller.faders[i - 1];
+                final isSelected = currentFaderId == fader.id;
+                return ListTile(
+                  title: Text(fader.name),
+                  trailing: isSelected
+                      ? const Icon(Icons.check, color: Colors.green)
+                      : null,
+                  onTap: () {
+                    controller.assignPadToFader(index, fader.id);
+                    Get.back();
+                  },
+                );
+              },
+            );
+          }),
+        ),
+        actions: [
+          TextButton(onPressed: Get.back, child: const Text('Cancel')),
+        ],
+      ),
+    );
   }
 
   void _showAudioRoutingDialog(int index) {
@@ -1384,7 +1593,9 @@ class HomeView extends GetView<HomeController> {
                     }
                   }),
                   if (controller.pads[index].keyboardShortcut != null ||
-                      controller.pads[index].deviceId != null) ...[
+                      controller.pads[index].deviceId != null ||
+                      controller.pads[index].faderId != null ||
+                      controller.pads[index].isBackground) ...[
                     const SizedBox(height: 4),
                     Row(
                       children: [
@@ -1405,6 +1616,30 @@ class HomeView extends GetView<HomeController> {
                                 color: Colors.white,
                                 fontSize: 10,
                                 fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        if (controller.pads[index].faderId != null)
+                          Tooltip(
+                            message: 'Linked to Mixer Fader',
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: Icon(
+                                Icons.linear_scale,
+                                size: 14,
+                                color: Colors.white.withValues(alpha: 0.8),
+                              ),
+                            ),
+                          ),
+                        if (controller.pads[index].isBackground)
+                          Tooltip(
+                            message: 'Background Pad (API Excluded)',
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: Icon(
+                                Icons.visibility_off,
+                                size: 14,
+                                color: Colors.white.withValues(alpha: 0.5),
                               ),
                             ),
                           ),
@@ -1736,6 +1971,259 @@ class HomeView extends GetView<HomeController> {
             ),
         ],
       ),
+    );
+  }
+
+  void _showAddFaderDialog(BuildContext context) {
+    final textCtrl = TextEditingController();
+    Get.dialog(
+      AlertDialog(
+        title: const Text('Add Fader'),
+        content: TextField(
+          controller: textCtrl,
+          decoration: const InputDecoration(hintText: 'Fader Name'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: Get.back, child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              if (textCtrl.text.isNotEmpty) {
+                controller.addFader(textCtrl.text);
+                Get.back();
+              }
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showFaderSettings(BuildContext context, int index) {
+    final fader = controller.faders[index];
+    StreamSubscription? sub;
+    
+    Get.dialog(
+      AlertDialog(
+        title: Text('Fader: ${fader.name}'),
+        content: SizedBox(
+          width: 400,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Assign MIDI CC to this fader:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                Obx(() {
+                  final currentCc = controller.faders[index].midiCc;
+                  return Column(
+                    children: [
+                      Text(
+                        currentCc != null ? 'Assigned: ${MidiNoteEvent.getDisplayNameForId(currentCc)}' : 'No CC assigned',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      if (currentCc != null) ...[
+                        const SizedBox(height: 8),
+                        TextButton(
+                          onPressed: () => controller.assignFaderMidiCc(index, null),
+                          child: const Text('Remove Assignment'),
+                        ),
+                      ],
+                    ],
+                  );
+                }),
+                const SizedBox(height: 8),
+                const Center(child: Text('Move a hardware fader to assign...', style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic))),
+                const Divider(height: 32),
+                const Text('Manage Linked Pads:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                Obx(() {
+                  final pads = controller.pads;
+                  return Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: List.generate(pads.length, (pIdx) {
+                      final p = pads[pIdx];
+                      final isLinked = p.faderId == fader.id;
+                      return ChoiceChip(
+                        label: Text(p.name, style: const TextStyle(fontSize: 10)),
+                        selected: isLinked,
+                        onSelected: (val) {
+                          controller.assignPadToFader(pIdx, val ? fader.id : null);
+                        },
+                      );
+                    }),
+                  );
+                }),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              sub?.cancel();
+              Get.back();
+            },
+            child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () {
+              sub?.cancel();
+              controller.removeFader(index);
+              Get.back();
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete Fader'),
+          ),
+        ],
+      ),
+    ).then((_) => sub?.cancel());
+
+    sub = controller.midiService.noteStream.listen((event) {
+      if (event.type == MidiEventType.controlChange) {
+        controller.assignFaderMidiCc(index, event.triggerId);
+        sub?.cancel();
+        if (Get.isDialogOpen ?? false) Get.back();
+      }
+    });
+  }
+}
+
+class _MixerPanel extends StatelessWidget {
+  final HomeController controller;
+  final VoidCallback onAddFader;
+  final Function(int) onFaderSettings;
+
+  const _MixerPanel({
+    required this.controller,
+    required this.onAddFader,
+    required this.onFaderSettings,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'MIXER',
+                style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.0),
+              ),
+              IconButton(
+                icon: const Icon(Icons.add, size: 16),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: onAddFader,
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: Obx(() {
+            if (controller.faders.isEmpty) {
+              return Center(
+                child: Text(
+                  'No faders',
+                  style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.5), fontSize: 10),
+                ),
+              );
+            }
+            return ListView.separated(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemCount: controller.faders.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemBuilder: (context, index) {
+                final fader = controller.faders[index];
+                return _FaderWidget(
+                  index: index,
+                  fader: fader,
+                  controller: controller,
+                  onSettings: () => onFaderSettings(index),
+                );
+              },
+            );
+          }),
+        ),
+      ],
+    );
+  }
+}
+
+class _FaderWidget extends StatelessWidget {
+  final int index;
+  final Fader fader;
+  final HomeController controller;
+  final VoidCallback onSettings;
+
+  const _FaderWidget({
+    required this.index,
+    required this.fader,
+    required this.controller,
+    required this.onSettings,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        InkWell(
+          onTap: onSettings,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Text(
+                    fader.name.toUpperCase(),
+                    style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+                Icon(Icons.settings, size: 10, color: scheme.onSurface.withValues(alpha: 0.5)),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        SizedBox(
+          height: 120,
+          child: RotatedBox(
+            quarterTurns: 3,
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 4,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                activeTrackColor: scheme.secondary,
+                thumbColor: scheme.secondary,
+              ),
+              child: Slider(
+                value: fader.volume,
+                onChanged: (val) => controller.updateFaderVolume(index, val),
+              ),
+            ),
+          ),
+        ),
+        if (fader.midiCc != null)
+          Text(
+            MidiNoteEvent.getDisplayNameForId(fader.midiCc!),
+            style: TextStyle(fontSize: 8, color: scheme.primary),
+            textAlign: TextAlign.center,
+          ),
+      ],
     );
   }
 }

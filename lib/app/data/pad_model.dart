@@ -5,6 +5,9 @@ class Pad {
   final bool isLooping;
   final String? keyboardShortcut;
   final int? midiNote;
+  final double volume; // Individual pad volume
+  final bool isBackground; // Background pads excluded from API
+  final String? faderId; // Linked fader ID
   final int? deviceId; // Added for audio routing
   final List<int>? outputChannels; // Added for channel routing
   final String filterType; // 'none', 'lowpass', 'highpass'
@@ -17,6 +20,9 @@ class Pad {
     this.isLooping = false,
     this.keyboardShortcut,
     this.midiNote,
+    this.volume = 1.0,
+    this.isBackground = false,
+    this.faderId,
     this.deviceId,
     this.outputChannels,
     this.filterType = 'none',
@@ -30,6 +36,9 @@ class Pad {
     bool? isLooping,
     String? keyboardShortcut,
     int? midiNote,
+    double? volume,
+    bool? isBackground,
+    String? faderId,
     int? deviceId,
     List<int>? outputChannels,
     String? filterType,
@@ -39,6 +48,7 @@ class Pad {
     bool clearOutputChannels = false,
     bool clearKeyboardShortcut = false,
     bool clearMidiNote = false,
+    bool clearFaderId = false,
   }) {
     return Pad(
       name: name ?? this.name,
@@ -48,6 +58,9 @@ class Pad {
       keyboardShortcut:
           clearKeyboardShortcut ? null : (keyboardShortcut ?? this.keyboardShortcut),
       midiNote: clearMidiNote ? null : (midiNote ?? this.midiNote),
+      volume: volume ?? this.volume,
+      isBackground: isBackground ?? this.isBackground,
+      faderId: clearFaderId ? null : (faderId ?? this.faderId),
       deviceId: clearDeviceId ? null : (deviceId ?? this.deviceId),
       outputChannels:
           clearOutputChannels ? null : (outputChannels ?? this.outputChannels),
@@ -63,6 +76,9 @@ class Pad {
         'isLooping': isLooping,
         'keyboardShortcut': keyboardShortcut,
         'midiNote': midiNote,
+        'volume': volume,
+        'isBackground': isBackground,
+        'faderId': faderId,
         'deviceId': deviceId,
         'outputChannels': outputChannels,
         'filterType': filterType,
@@ -77,10 +93,58 @@ class Pad {
       isLooping: (json['isLooping'] as bool?) ?? false,
       keyboardShortcut: json['keyboardShortcut'] as String?,
       midiNote: json['midiNote'] as int?,
+      volume: (json['volume'] as num?)?.toDouble() ?? 1.0,
+      isBackground: (json['isBackground'] as bool?) ?? false,
+      faderId: json['faderId'] as String?,
       deviceId: json['deviceId'] as int?,
       outputChannels: (json['outputChannels'] as List?)?.cast<int>(),
       filterType: (json['filterType'] as String?) ?? 'none',
       filterFrequency: (json['filterFrequency'] as num?)?.toDouble() ?? 20000.0,
+    );
+  }
+}
+
+class Fader {
+  final String id;
+  final String name;
+  final double volume;
+  final int? midiCc;
+
+  const Fader({
+    required this.id,
+    required this.name,
+    this.volume = 1.0,
+    this.midiCc,
+  });
+
+  Fader copyWith({
+    String? id,
+    String? name,
+    double? volume,
+    int? midiCc,
+    bool clearMidiCc = false,
+  }) {
+    return Fader(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      volume: volume ?? this.volume,
+      midiCc: clearMidiCc ? null : (midiCc ?? this.midiCc),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'volume': volume,
+        'midiCc': midiCc,
+      };
+
+  factory Fader.fromJson(Map<String, dynamic> json) {
+    return Fader(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      volume: (json['volume'] as num?)?.toDouble() ?? 1.0,
+      midiCc: json['midiCc'] as int?,
     );
   }
 }

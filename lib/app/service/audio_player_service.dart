@@ -36,6 +36,7 @@ class ActiveStream {
   final int streamId;
   final String path;
   final int? deviceId; // Captured device ID
+  final bool isBackground;
   DateTime startTime;
   final double durationSeconds;
   bool isLooping;
@@ -46,6 +47,7 @@ class ActiveStream {
     required this.streamId,
     required this.path,
     this.deviceId,
+    this.isBackground = false,
     required this.startTime,
     required this.durationSeconds,
     this.isLooping = false,
@@ -158,10 +160,13 @@ class AudioPlayerService extends GetxService {
     final deviceId =
         event['device_id'] as int?; // Needs sidecar update to send this
 
+    final isBackground = _pathIsBackground[path] ?? false;
+
     final stream = ActiveStream(
       streamId: streamId,
       path: path,
       deviceId: deviceId,
+      isBackground: isBackground,
       startTime: DateTime.now(),
       durationSeconds: duration,
       isLooping: loop,
@@ -248,21 +253,29 @@ class AudioPlayerService extends GetxService {
     // No-op for sidecar streaming
   }
 
+  // Track which paths are currently playing as background
+  final Map<String, bool> _pathIsBackground = {};
+
   Future<void> playSound(
     String path, {
     bool loop = false,
     int? deviceId,
+    double volume = 1.0,
+    bool isBackground = false,
     List<int>? outputChannels,
     String filterType = 'none',
     double filterFrequency = 20000.0,
   }) async {
     await ensureInitialized();
+    _pathIsBackground[path] = isBackground;
+    
     // Default to selected device, or use the explicit deviceId passed
     final targetDeviceId = deviceId ?? selectedDevice.value?.id;
     _audioEngine.playAudio(
       path,
       deviceId: targetDeviceId,
       loop: loop,
+      volume: volume,
       outputChannels: outputChannels,
       filterType: filterType,
       filterFrequency: filterFrequency,
@@ -272,6 +285,13 @@ class AudioPlayerService extends GetxService {
     if (_inactiveSeekPositions.containsKey(path)) {
       final pos = _inactiveSeekPositions.remove(path)!;
       Future.delayed(const Duration(milliseconds: 100), () => seek(path, pos));
+    }
+  }
+
+  Future<void> setVolume(String path, double volume) async {
+    final streams = _activeStreams.values.where((s) => s.path == path).toList();
+    for (final s in streams) {
+      _audioEngine.setVolume(s.streamId, volume);
     }
   }
 
@@ -317,7 +337,7 @@ class AudioPlayerService extends GetxService {
 
     for (final streamId in activeHandles) {
       final stream = _activeStreams[streamId];
-      if (stream == null) continue;
+      if (stream == null || stream.isBackground) continue;
 
       // Calculate elapsed
       final elapsed = now.difference(stream.startTime).inMilliseconds / 1000.0;

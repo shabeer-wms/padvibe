@@ -26,6 +26,9 @@ class HomeController extends GetxController {
   final groups = <PadGroup>[].obs;
   final currentGroupIndex = 0.obs;
 
+  // Faders
+  final faders = <Fader>[].obs;
+
   // Grid Settings
   final gridColumns = 5.obs; // Default to 5 columns
 
@@ -33,6 +36,7 @@ class HomeController extends GetxController {
   final pads = <Pad>[for (int i = 1; i <= 20; i++) Pad(name: 'Pad $i')].obs;
 
   final remainingSeconds = 0.0.obs;
+  final heartbeat = 0.obs; // Added to trigger UI updates even for background pads
   final masterVolume = 1.0.obs; // Master volume control (0.0 to 1.0)
   Timer? _ticker;
 
@@ -115,6 +119,12 @@ class HomeController extends GetxController {
         currentGroupIndex.value = 0;
       }
 
+      // Load faders from splash
+      final loadedFaders = args['faders'] as List<Fader>?;
+      if (loadedFaders != null) {
+        faders.assignAll(loadedFaders);
+      }
+
       // Load grid columns from splash
       final loadedGridCols = args['gridColumns'] as int?;
       if (loadedGridCols != null) {
@@ -135,6 +145,7 @@ class HomeController extends GetxController {
     }
 
     _ticker = Timer.periodic(const Duration(milliseconds: 16), (_) async {
+      heartbeat.value++;
       final v = audioService.getRemainingTime();
       remainingSeconds.value = v;
     });
@@ -144,11 +155,26 @@ class HomeController extends GetxController {
       if (editingPadIndex.value != -1) return; // Ignore MIDI if editing name
 
       if (event.type == MidiEventType.noteOn) {
-        debugPrint('HomeController received MIDI Note On: ${event.note}');
-        final index = pads.indexWhere((p) => p.midiNote == event.note);
-        debugPrint('Matching pad index: $index');
-        if (index != -1) {
-          playPad(index);
+        debugPrint(
+            'HomeController received MIDI Note Trigger: ID=${event.triggerId}');
+        final index = pads.indexWhere((p) => p.midiNote == event.triggerId);
+        if (index != -1) playPad(index);
+      } else if (event.type == MidiEventType.controlChange) {
+        // 1. Check if this CC is a Pad Trigger (Momentary CC)
+        final triggerIndex = pads.indexWhere((p) => p.midiNote == event.triggerId);
+        if (triggerIndex != -1) {
+          if (event.velocity > 0) {
+            playPad(triggerIndex);
+          }
+          return; // Stop processing if handled as trigger
+        }
+
+        // 2. Handle Fader CC (Continuous Control)
+        for (int i = 0; i < faders.length; i++) {
+          if (faders[i].midiCc == event.triggerId) {
+            final vol = event.velocity / 127.0;
+            updateFaderVolume(i, vol);
+          }
         }
       }
     });
@@ -314,6 +340,8 @@ class HomeController extends GetxController {
       path,
       loop: pad.isLooping,
       deviceId: pad.deviceId,
+      volume: pad.volume,
+      isBackground: pad.isBackground,
       outputChannels: pad.outputChannels,
       filterType: pad.filterType,
       filterFrequency: pad.filterFrequency,
@@ -491,6 +519,116 @@ class HomeController extends GetxController {
     );
     _updateCurrentGroup();
     _saveGroups();
+  }
+
+  void toggleBackground(int index) {
+    final pad = pads[index];
+    pads[index] = pad.copyWith(isBackground: !pad.isBackground);
+    _updateCurrentGroup();
+    _saveGroups();
+  }
+
+  void updatePadVolume(int index, double volume) {
+    final pad = pads[index];
+    final v = volume.clamp(0.0, 1.0);
+    pads[index] = pad.copyWith(volume: v);
+    _updateCurrentGroup();
+    _saveGroups();
+
+    if (pad.path != null && audioService.isPlaying(pad.path!)) {
+      audioService.setVolume(pad.path!, v);
+    }
+  }
+
+  // --- Fader Management ---
+
+  void addFader(String name) {
+    faders.add(Fader(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: name,
+    ));
+    _saveFaders();
+  }
+
+  void removeFader(int index) {
+    final faderId = faders[index].id;
+    faders.removeAt(index);
+    
+    // Unlink pads
+    for (int g = 0; g < groups.length; g++) {
+      final groupPads = groups[g].pads;
+      bool changed = false;
+      for (int p = 0; p < groupPads.length; p++) {
+        if (groupPads[p].faderId == faderId) {
+          groupPads[p] = groupPads[p].copyWith(clearFaderId: true);
+          changed = true;
+        }
+      }
+      if (changed) {
+        if (g == currentGroupIndex.value) {
+          pads.assignAll(groupPads);
+        }
+        groups[g] = groups[g].copyWith(pads: groupPads);
+      }
+    }
+    _saveGroups();
+    _saveFaders();
+  }
+
+  void updateFaderVolume(int index, double volume) {
+    final fader = faders[index];
+    final v = volume.clamp(0.0, 1.0);
+    faders[index] = fader.copyWith(volume: v);
+    _saveFaders();
+
+    // Update all linked pads across all groups
+    for (int g = 0; g < groups.length; g++) {
+      final groupPads = groups[g].pads;
+      bool changed = false;
+      for (int p = 0; p < groupPads.length; p++) {
+        if (groupPads[p].faderId == fader.id) {
+          groupPads[p] = groupPads[p].copyWith(volume: v);
+          changed = true;
+          
+          // If this pad is in the current group and is playing, update its live volume
+          if (g == currentGroupIndex.value && groupPads[p].path != null && audioService.isPlaying(groupPads[p].path!)) {
+            audioService.setVolume(groupPads[p].path!, v);
+          }
+        }
+      }
+      if (changed) {
+        if (g == currentGroupIndex.value) {
+          pads.assignAll(groupPads);
+        }
+        groups[g] = groups[g].copyWith(pads: groupPads);
+      }
+    }
+    _saveGroups();
+  }
+
+  void assignFaderMidiCc(int index, int? cc) {
+    faders[index] = faders[index].copyWith(midiCc: cc, clearMidiCc: cc == null);
+    _saveFaders();
+  }
+
+  void assignPadToFader(int padIndex, String? faderId) {
+    final fader = faders.firstWhereOrNull((f) => f.id == faderId);
+    pads[padIndex] = pads[padIndex].copyWith(
+      faderId: faderId,
+      clearFaderId: faderId == null,
+      volume: fader?.volume ?? pads[padIndex].volume,
+    );
+    _updateCurrentGroup();
+    _saveGroups();
+    
+    // Update live volume if playing
+    if (fader != null && pads[padIndex].path != null && audioService.isPlaying(pads[padIndex].path!)) {
+      audioService.setVolume(pads[padIndex].path!, fader.volume);
+    }
+  }
+
+  Future<void> _saveFaders() async {
+    await storage.saveFaders(faders.toList());
   }
 
   Future<void> assignFileToPad(int index) async {

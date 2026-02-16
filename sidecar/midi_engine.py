@@ -33,16 +33,29 @@ class MidiEngine:
         while self.running:
             if self.current_input_port:
                 for msg in self.current_input_port.iter_pending():
-                    if msg.type in ['note_on', 'note_off']:
+                    if msg.type in ['note_on', 'note_off', 'control_change', 'polytouch', 'aftertouch', 'pitchwheel']:
                         data = {
                             "type": "midi_message",
                             "message": {
                                 "type": msg.type,
-                                "note": msg.note,
-                                "velocity": msg.velocity,
-                                "channel": msg.channel
+                                "channel": msg.channel,
                             }
                         }
+                        
+                        if msg.type in ['note_on', 'note_off']:
+                            data["message"]["note"] = msg.note
+                            data["message"]["velocity"] = msg.velocity
+                        elif msg.type == 'control_change':
+                            data["message"]["control"] = msg.control
+                            data["message"]["value"] = msg.value
+                        elif msg.type == 'polytouch':
+                            data["message"]["note"] = msg.note
+                            data["message"]["value"] = msg.value
+                        elif msg.type == 'aftertouch':
+                            data["message"]["value"] = msg.value
+                        elif msg.type == 'pitchwheel':
+                            data["message"]["pitch"] = msg.pitch
+                        
                         await self.broadcast(json.dumps(data))
             await asyncio.sleep(0.001)
 

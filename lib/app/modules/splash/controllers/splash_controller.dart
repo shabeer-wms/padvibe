@@ -15,6 +15,7 @@ class SplashController extends GetxController {
 
   // Store loaded data to pass to HomeController
   final loadedGroups = <PadGroup>[].obs;
+  final loadedFaders = <Fader>[].obs;
   final loadedGridColumns = 5.obs;
   String? savedAudioDeviceName;
   int? savedAudioDeviceId;
@@ -47,6 +48,11 @@ class SplashController extends GetxController {
           ),
         );
       }
+
+      // Step 2.5: Load faders
+      initStatus.value = 'Loading faders...';
+      final faders = await storage.loadFaders();
+      loadedFaders.assignAll(faders);
       await Future.delayed(const Duration(milliseconds: 200));
 
       // Step 3: Load grid columns preference
@@ -102,6 +108,7 @@ class SplashController extends GetxController {
         Routes.home,
         arguments: {
           'groups': loadedGroups.toList(),
+          'faders': loadedFaders.toList(),
           'gridColumns': loadedGridColumns.value,
           'savedAudioDeviceName': savedAudioDeviceName,
           'savedAudioDeviceId': savedAudioDeviceId,

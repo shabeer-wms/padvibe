@@ -381,6 +381,10 @@ class SidecarService extends GetxService {
       final data = jsonDecode(message);
       final type = data['type'];
 
+      if (type == 'midi_message') {
+        debugPrint('RECEIVED MIDI: ${jsonEncode(data['message'])}');
+      }
+
       // Global status handling
       if (type == 'status') {
         debugPrint('Sidecar Status: ${data['message']}');

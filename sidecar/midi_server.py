@@ -35,12 +35,14 @@ def watchdog():
 async def broadcast(message):
     """Sends a message to all connected WebSocket clients."""
     if clients:
-        # Filter out closed clients
+        # print(f"Broadcasting: {message[:100]}...") # Debug
+        tasks = [client.send(message) for client in clients]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Cleanup closed clients based on results
         to_remove = set()
-        for client in clients:
-            try:
-                await client.send(message)
-            except websockets.exceptions.ConnectionClosed:
+        for client, result in zip(clients, results):
+            if isinstance(result, (websockets.exceptions.ConnectionClosed, BrokenPipeError)):
                 to_remove.add(client)
         clients.difference_update(to_remove)
 

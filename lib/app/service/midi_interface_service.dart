@@ -4,18 +4,56 @@ import 'dart:convert';
 import 'package:get/get.dart';
 import 'sidecar_service.dart';
 
-enum MidiEventType { noteOn, noteOff }
+enum MidiEventType { noteOn, noteOff, controlChange }
 
 class MidiNoteEvent {
-  final int note;
+  final int? note;
+  final int? control;
+  final int? value;
   final int velocity;
+  final int channel;
   final MidiEventType type;
 
   MidiNoteEvent({
-    required this.note,
+    this.note,
+    this.control,
+    this.value,
     required this.velocity,
+    required this.channel,
     required this.type,
   });
+
+  int get triggerId {
+    if (type == MidiEventType.controlChange) {
+      return 30000 + (channel * 200) + (control ?? 0);
+    } else {
+      return 10000 + (channel * 200) + (note ?? 0);
+    }
+  }
+
+  String get displayName {
+    final ch = channel + 1;
+    if (type == MidiEventType.controlChange) {
+      return 'CC $control (Ch $ch)';
+    } else {
+      return 'Note $note (Ch $ch)';
+    }
+  }
+
+  static String getDisplayNameForId(int id) {
+    if (id >= 30000) {
+      final rem = id - 30000;
+      final ch = (rem ~/ 200) + 1;
+      final cc = rem % 200;
+      return 'CC $cc (Ch $ch)';
+    } else if (id >= 10000) {
+      final rem = id - 10000;
+      final ch = (rem ~/ 200) + 1;
+      final note = rem % 200;
+      return 'Note $note (Ch $ch)';
+    }
+    return 'ID $id';
+  }
 }
 
 class MidiDevice {
@@ -91,23 +129,43 @@ class MidiInterfaceService extends GetxService {
   }
 
   void _handleMidiMessage(Map<String, dynamic> data) {
+    debugPrint('MidiInterfaceService processing: ${jsonEncode(data)}');
     final msg = data['message'];
     final msgType = msg['type'];
-    final note = msg['note'];
-    final velocity = msg['velocity'];
+    final int channel = msg['channel'] ?? 0;
+    final int? note = msg['note'];
+    final int? control = msg['control'];
+    final int? value = msg['value'];
+    final int velocity = msg['velocity'] ?? (value ?? 0);
 
     if (msgType == 'note_on' && velocity > 0) {
       _noteStreamController.add(
         MidiNoteEvent(
           note: note,
           velocity: velocity,
+          channel: channel,
           type: MidiEventType.noteOn,
         ),
       );
     } else if (msgType == 'note_off' ||
         (msgType == 'note_on' && velocity == 0)) {
       _noteStreamController.add(
-        MidiNoteEvent(note: note, velocity: 0, type: MidiEventType.noteOff),
+        MidiNoteEvent(
+          note: note,
+          velocity: 0,
+          channel: channel,
+          type: MidiEventType.noteOff,
+        ),
+      );
+    } else if (msgType == 'control_change') {
+      _noteStreamController.add(
+        MidiNoteEvent(
+          control: control,
+          value: value,
+          velocity: value ?? 0,
+          channel: channel,
+          type: MidiEventType.controlChange,
+        ),
       );
     }
   }

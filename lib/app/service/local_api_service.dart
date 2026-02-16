@@ -211,6 +211,7 @@ class LocalApiService extends GetxService {
     final padsList = <Map<String, dynamic>>[];
     for (int i = 0; i < c.pads.length; i++) {
       final p = c.pads[i];
+      if (p.isBackground) continue; // Skip background pads for API
       final path = p.path;
 
       String state = 'empty';
