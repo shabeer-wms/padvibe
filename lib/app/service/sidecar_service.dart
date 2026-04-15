@@ -45,9 +45,13 @@ class SidecarService extends GetxService {
       if (!await logDir.exists()) {
         await logDir.create(recursive: true);
       }
-      _logFile = File('${logDir.path}/sidecar_${DateTime.now().millisecondsSinceEpoch}.log');
+      _logFile = File(
+        '${logDir.path}/sidecar_${DateTime.now().millisecondsSinceEpoch}.log',
+      );
       await _log('=== PadVibe Sidecar Log ===');
-      await _log('Platform: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}');
+      await _log(
+        'Platform: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}',
+      );
       await _log('Executable: ${Platform.resolvedExecutable}');
     } catch (e) {
       debugPrint('Failed to initialize logging: $e');
@@ -95,12 +99,16 @@ class SidecarService extends GetxService {
       if (_pythonProcess != null) {
         try {
           // Use 'kill -0' which is very fast and standard on Unix to check process existence
-          final result = Process.runSync('kill', ['-0', '${_pythonProcess!.pid}']);
+          final result = Process.runSync('kill', [
+            '-0',
+            '${_pythonProcess!.pid}',
+          ]);
           if (result.exitCode != 0) {
             _healthCheckFailCount++;
             if (_healthCheckFailCount >= 2) {
               sidecarStatus.value = 'Stopped';
-              lastError.value = 'Sidecar process terminated unexpectedly (Health check failed)';
+              lastError.value =
+                  'Sidecar process terminated unexpectedly (Health check failed)';
             }
           } else {
             _healthCheckFailCount = 0;
@@ -175,16 +183,19 @@ class SidecarService extends GetxService {
 
       if (executablePath != null && await File(executablePath).exists()) {
         await _log('Found sidecar binary at $executablePath');
-        
+
         // Check if file is executable
         final stat = await File(executablePath).stat();
         await _log('Binary permissions: ${stat.modeString()}');
-        
+
         initStatusText.value = 'Starting Sidecar binary...';
 
         if (Platform.isMacOS || Platform.isLinux) {
           try {
-            final chmodResult = await Process.run('/bin/chmod', ['+x', executablePath]);
+            final chmodResult = await Process.run('/bin/chmod', [
+              '+x',
+              executablePath,
+            ]);
             await _log('chmod result: exit=${chmodResult.exitCode}');
           } catch (e) {
             await _log('Chmod failed: $e');
@@ -194,7 +205,10 @@ class SidecarService extends GetxService {
         // Verify code signature on macOS
         if (Platform.isMacOS) {
           try {
-            final codesignResult = await Process.run('codesign', ['-dv', executablePath]);
+            final codesignResult = await Process.run('codesign', [
+              '-dv',
+              executablePath,
+            ]);
             await _log('Code signing status: ${codesignResult.stderr}');
           } catch (e) {
             await _log('Code signature check failed: $e');
@@ -252,7 +266,9 @@ class SidecarService extends GetxService {
       if (_pythonProcess != null) {
         sidecarPid.value = _pythonProcess!.pid;
         await _log('Sidecar process started with PID: ${_pythonProcess!.pid}');
-        await _log('Machine Architecture: ${Platform.version}'); // Logs some system info
+        await _log(
+          'Machine Architecture: ${Platform.version}',
+        ); // Logs some system info
         _startHealthCheck();
 
         // Monitor for unexpected exit
@@ -261,7 +277,8 @@ class SidecarService extends GetxService {
           sidecarPid.value = null;
           if (code != 0) {
             sidecarStatus.value = 'Error';
-            final msg = 'Sidecar crashed (Code $code). Check logs at: ${_logFile?.path}';
+            final msg =
+                'Sidecar crashed (Code $code). Check logs at: ${_logFile?.path}';
             lastError.value = 'Crashed with code $code. Check log file.';
             initStatusText.value = msg;
             await _log('FATAL ERROR: $msg');
@@ -272,7 +289,15 @@ class SidecarService extends GetxService {
       }
 
       _pythonProcess?.stdout.transform(utf8.decoder).listen((data) async {
-        await _log('SIDECAR OUT: $data');
+        final trimmed = data.trim();
+        final isImportant =
+            trimmed.contains('PORT_BIND_SUCCESS:') ||
+            trimmed.contains('Starting WebSocket server') ||
+            trimmed.contains('ERROR') ||
+            trimmed.contains('Error');
+        if (isImportant) {
+          await _log('SIDECAR OUT: $trimmed');
+        }
         if (data.contains('PORT_BIND_SUCCESS:')) {
           final portStr = data.split('PORT_BIND_SUCCESS:').last.trim();
           final port = int.tryParse(portStr);
@@ -298,7 +323,8 @@ class SidecarService extends GetxService {
       await _log('Error starting Python sidecar: $e');
       await _log('Stack trace: $stackTrace');
       sidecarStatus.value = 'Error';
-      final errorMsg = 'Initialization Error: ${e.toString()}\nLog: ${_logFile?.path}';
+      final errorMsg =
+          'Initialization Error: ${e.toString()}\nLog: ${_logFile?.path}';
       initStatusText.value = errorMsg;
       lastError.value = errorMsg;
     }
@@ -319,7 +345,9 @@ class SidecarService extends GetxService {
 
   Future<void> _connectToWebSocket({int? port, int retries = 5}) async {
     final int currentPort = port ?? _discoveredPort;
-    debugPrint('Connecting to WebSocket on port $currentPort (Attempts left: $retries)...');
+    debugPrint(
+      'Connecting to WebSocket on port $currentPort (Attempts left: $retries)...',
+    );
     initStatusText.value = 'Establishing WebSocket connection...';
     wsConnectionStatus.value = 'Connecting';
 
@@ -351,7 +379,8 @@ class SidecarService extends GetxService {
             initStatusText.value = 'Connection failed, retrying ($retries)...';
             Future.delayed(
               const Duration(seconds: 1),
-              () => _connectToWebSocket(port: currentPort, retries: retries - 1),
+              () =>
+                  _connectToWebSocket(port: currentPort, retries: retries - 1),
             );
           }
         },
@@ -413,7 +442,6 @@ class SidecarService extends GetxService {
   void send(String message) {
     if (_channel != null && _isServerReady) {
       try {
-        debugPrint('DEBUG SENDING: $message');
         _channel!.sink.add(message);
       } catch (e) {
         debugPrint('Error sending message to WebSocket: $e');

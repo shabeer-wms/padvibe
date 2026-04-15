@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 
@@ -203,17 +202,28 @@ class AudioPlayerService extends GetxService {
 
   // Track pending waveform requests
   final Map<String, Completer<void>> _pendingWaveforms = {};
+  final Map<String, int> _waveformFailures = {};
+  final Map<String, DateTime> _waveformRetryAfter = {};
+
+  // Throttle high-frequency volume updates per path.
+  final Map<String, DateTime> _lastVolumeSentAt = {};
+  final Map<String, Timer> _volumeThrottleTimers = {};
+  final Map<String, double> _pendingVolumeByPath = {};
 
   void _handleWaveformData(Map<String, dynamic> event) {
     final path = event['file_path'] as String;
-    final data = (event['data'] as List).map((e) => (e as num).toDouble()).toList();
+    final data = (event['data'] as List)
+        .map((e) => (e as num).toDouble())
+        .toList();
     final duration = (event['duration'] as num?)?.toDouble() ?? 0.0;
     _waveforms[path] = data;
+    _waveformFailures.remove(path);
+    _waveformRetryAfter.remove(path);
     if (duration > 0) {
       _fileDurations[path] = duration;
     }
     _waveformStreamController.add(path);
-    
+
     // Complete pending future
     if (_pendingWaveforms.containsKey(path)) {
       _pendingWaveforms.remove(path)?.complete();
@@ -224,7 +234,12 @@ class AudioPlayerService extends GetxService {
 
   Future<void> loadWaveform(String path) async {
     if (_waveforms.containsKey(path)) return; // Already loaded
-    
+
+    final retryAt = _waveformRetryAfter[path];
+    if (retryAt != null && DateTime.now().isBefore(retryAt)) {
+      return;
+    }
+
     // If already requesting, return existing future
     if (_pendingWaveforms.containsKey(path)) {
       return _pendingWaveforms[path]!.future;
@@ -232,14 +247,20 @@ class AudioPlayerService extends GetxService {
 
     final completer = Completer<void>();
     _pendingWaveforms[path] = completer;
-    
+
     _audioEngine.requestWaveform(path);
-    
-    // Safety timeout
+
+    // Safety timeout with backoff to avoid request storms.
     return completer.future.timeout(
-      const Duration(seconds: 5),
+      const Duration(seconds: 12),
       onTimeout: () {
         _pendingWaveforms.remove(path);
+        final failures = (_waveformFailures[path] ?? 0) + 1;
+        _waveformFailures[path] = failures;
+        final backoffSeconds = failures >= 5 ? 30 : (1 << (failures - 1));
+        _waveformRetryAfter[path] = DateTime.now().add(
+          Duration(seconds: backoffSeconds),
+        );
       },
     );
   }
@@ -278,6 +299,11 @@ class AudioPlayerService extends GetxService {
   @override
   void onClose() {
     _audioEventSub?.cancel();
+    for (final timer in _volumeThrottleTimers.values) {
+      timer.cancel();
+    }
+    _volumeThrottleTimers.clear();
+    _waveformStreamController.close();
     stopAllSounds();
     super.onClose();
   }
@@ -302,10 +328,12 @@ class AudioPlayerService extends GetxService {
     await ensureInitialized();
     _pathIsBackground[path] = isBackground;
     _pausedPaths.remove(path);
-    
+
     // Default to selected device, or use the explicit deviceId passed
     final targetDeviceId = deviceId ?? selectedDevice.value?.id;
-    debugPrint('DEBUG: audio_player_service sending play request to engine. Device: $targetDeviceId, Volume: $volume');
+    debugPrint(
+      'DEBUG: audio_player_service sending play request to engine. Device: $targetDeviceId, Volume: $volume',
+    );
     _audioEngine.playAudio(
       path,
       deviceId: targetDeviceId,
@@ -315,11 +343,33 @@ class AudioPlayerService extends GetxService {
       filterType: filterType,
       filterFrequency: filterFrequency,
     );
-    
+
     // Resume logic is now handled in _handleAudioStarted
   }
 
   Future<void> setVolume(String path, double volume) async {
+    _pendingVolumeByPath[path] = volume;
+    const minInterval = Duration(milliseconds: 40);
+    final now = DateTime.now();
+    final lastSent = _lastVolumeSentAt[path];
+
+    if (lastSent == null || now.difference(lastSent) >= minInterval) {
+      _sendVolumeNow(path, volume);
+      return;
+    }
+
+    final remaining = minInterval - now.difference(lastSent);
+    _volumeThrottleTimers[path]?.cancel();
+    _volumeThrottleTimers[path] = Timer(remaining, () {
+      final pendingVolume = _pendingVolumeByPath.remove(path);
+      if (pendingVolume != null) {
+        _sendVolumeNow(path, pendingVolume);
+      }
+    });
+  }
+
+  void _sendVolumeNow(String path, double volume) {
+    _lastVolumeSentAt[path] = DateTime.now();
     final streams = _activeStreams.values.where((s) => s.path == path).toList();
     for (final s in streams) {
       _audioEngine.setVolume(s.streamId, volume);

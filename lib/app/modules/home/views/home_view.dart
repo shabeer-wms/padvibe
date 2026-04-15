@@ -223,7 +223,9 @@ class HomeView extends GetView<HomeController> {
         focusNode: controller.focusNode,
         onKeyEvent: (node, event) {
           // IMPORTANT: Ignore shortcuts if we are currently editing a pad name
-          if (controller.editingPadIndex.value != -1) return KeyEventResult.ignored;
+          if (controller.editingPadIndex.value != -1) {
+            return KeyEventResult.ignored;
+          }
 
           if (event is KeyDownEvent) {
             // Space key stops all
@@ -262,121 +264,148 @@ class HomeView extends GetView<HomeController> {
           behavior: HitTestBehavior.opaque,
           child: Row(
             children: [
-            Expanded(
-              child: Column(
-                children: [
-                  Expanded(
-                    child: Obx(() {
-                      // Read the ticker to trigger rebuilds for progress bars.
-                      controller.remainingSeconds.value;
-                      controller.heartbeat.value; // Ensures background pads update too
-                      // Also observe active handles for immediate play/pause updates
-                      controller.audioService.activeHandles.length;
-                      // Also observe manual force updates (e.g. seeking while paused)
-                      controller.forceUpdate.value;
-                      return Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            return Obx(() {
-                              const spacing = 12.0;
-                              final cols = controller.gridColumns.value;
-                              final childAspect = 4 / 3;
+              Expanded(
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: Obx(() {
+                        // Read the ticker to trigger rebuilds for progress bars.
+                        controller.remainingSeconds.value;
+                        controller
+                            .heartbeat
+                            .value; // Ensures background pads update too
+                        // Also observe active handles for immediate play/pause updates
+                        controller.audioService.activeHandles.length;
+                        // Also observe manual force updates (e.g. seeking while paused)
+                        controller.forceUpdate.value;
+                        return Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              return Obx(() {
+                                const spacing = 12.0;
+                                final cols = controller.gridColumns.value;
+                                final childAspect = 4 / 3;
 
-                              final foregroundIndices = <int>[];
-                              final backgroundIndices = <int>[];
+                                final foregroundIndices = <int>[];
+                                final backgroundIndices = <int>[];
 
-                              for (int i = 0; i < controller.pads.length; i++) {
-                                if (controller.pads[i].isBackground) {
-                                  backgroundIndices.add(i);
-                                } else {
-                                  foregroundIndices.add(i);
+                                for (
+                                  int i = 0;
+                                  i < controller.pads.length;
+                                  i++
+                                ) {
+                                  if (controller.pads[i].isBackground) {
+                                    backgroundIndices.add(i);
+                                  } else {
+                                    foregroundIndices.add(i);
+                                  }
                                 }
-                              }
 
-                              return CustomScrollView(
-                                slivers: [
-                                  if (foregroundIndices.isNotEmpty) ...[
-                                    SliverToBoxAdapter(
-                                      child: Padding(
-                                        padding: const EdgeInsets.symmetric(vertical: 8.0),
-                                        child: Text(
-                                          'FOREGROUND PADS',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            letterSpacing: 1.2,
-                                            fontSize: 12,
-                                            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+                                return CustomScrollView(
+                                  slivers: [
+                                    if (foregroundIndices.isNotEmpty) ...[
+                                      SliverToBoxAdapter(
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 8.0,
+                                          ),
+                                          child: Text(
+                                            'FOREGROUND PADS',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              letterSpacing: 1.2,
+                                              fontSize: 12,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurface
+                                                  .withValues(alpha: 0.7),
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                    SliverGrid(
-                                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                                        crossAxisCount: cols,
-                                        mainAxisSpacing: spacing,
-                                        crossAxisSpacing: spacing,
-                                        childAspectRatio: childAspect,
+                                      SliverGrid(
+                                        gridDelegate:
+                                            SliverGridDelegateWithFixedCrossAxisCount(
+                                              crossAxisCount: cols,
+                                              mainAxisSpacing: spacing,
+                                              crossAxisSpacing: spacing,
+                                              childAspectRatio: childAspect,
+                                            ),
+                                        delegate: SliverChildBuilderDelegate(
+                                          (context, i) {
+                                            final index = foregroundIndices[i];
+                                            return _buildPadItem(
+                                              context,
+                                              index,
+                                              colors,
+                                            );
+                                          },
+                                          childCount: foregroundIndices.length,
+                                        ),
                                       ),
-                                      delegate: SliverChildBuilderDelegate(
-                                        (context, i) {
-                                          final index = foregroundIndices[i];
-                                          return _buildPadItem(context, index, colors);
-                                        },
-                                        childCount: foregroundIndices.length,
-                                      ),
-                                    ),
-                                  ],
-                                  if (backgroundIndices.isNotEmpty) ...[
-                                    SliverToBoxAdapter(
-                                      child: Padding(
-                                        padding: const EdgeInsets.only(top: 24.0, bottom: 8.0),
-                                        child: Text(
-                                          'BACKGROUND PADS (API EXCLUDED)',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            letterSpacing: 1.2,
-                                            fontSize: 12,
-                                            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+                                    ],
+                                    if (backgroundIndices.isNotEmpty) ...[
+                                      SliverToBoxAdapter(
+                                        child: Padding(
+                                          padding: const EdgeInsets.only(
+                                            top: 24.0,
+                                            bottom: 8.0,
+                                          ),
+                                          child: Text(
+                                            'BACKGROUND PADS (API EXCLUDED)',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              letterSpacing: 1.2,
+                                              fontSize: 12,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurface
+                                                  .withValues(alpha: 0.7),
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                    SliverGrid(
-                                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                                        crossAxisCount: cols,
-                                        mainAxisSpacing: spacing,
-                                        crossAxisSpacing: spacing,
-                                        childAspectRatio: childAspect,
+                                      SliverGrid(
+                                        gridDelegate:
+                                            SliverGridDelegateWithFixedCrossAxisCount(
+                                              crossAxisCount: cols,
+                                              mainAxisSpacing: spacing,
+                                              crossAxisSpacing: spacing,
+                                              childAspectRatio: childAspect,
+                                            ),
+                                        delegate: SliverChildBuilderDelegate(
+                                          (context, i) {
+                                            final index = backgroundIndices[i];
+                                            return _buildPadItem(
+                                              context,
+                                              index,
+                                              colors,
+                                            );
+                                          },
+                                          childCount: backgroundIndices.length,
+                                        ),
                                       ),
-                                      delegate: SliverChildBuilderDelegate(
-                                        (context, i) {
-                                          final index = backgroundIndices[i];
-                                          return _buildPadItem(context, index, colors);
-                                        },
-                                        childCount: backgroundIndices.length,
-                                      ),
-                                    ),
+                                    ],
                                   ],
-                                ],
-                              );
-                            });
-                          },
-                        ),
-                      );
-                    }),
-                  ),
-                  _buildBottomPanel(context),
-                ],
+                                );
+                              });
+                            },
+                          ),
+                        );
+                      }),
+                    ),
+                    _buildBottomPanel(context),
+                  ],
+                ),
               ),
-            ),
-            _buildMasterMonitor(context),
-          ],
+              _buildMasterMonitor(context),
+            ],
+          ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   Widget _buildPadItem(BuildContext context, int index, List<Color> colors) {
     final pad = controller.pads[index].obs;
@@ -402,14 +431,7 @@ class HomeView extends GetView<HomeController> {
           }
           controller.assignFilePathToPad(index, f.path);
         },
-        child: _pad(
-          color,
-          hasFile,
-          index,
-          pad.value,
-          fileName,
-          context,
-        ),
+        child: _pad(color, hasFile, index, pad.value, fileName, context),
       ),
     );
   }
@@ -743,9 +765,9 @@ class HomeView extends GetView<HomeController> {
           onKeyEvent: (event) {
             if (event is KeyDownEvent) {
               final key = event.logicalKey;
-              
+
               // Skip modifier keys alone
-              if (key == LogicalKeyboardKey.shiftLeft || 
+              if (key == LogicalKeyboardKey.shiftLeft ||
                   key == LogicalKeyboardKey.shiftRight ||
                   key == LogicalKeyboardKey.controlLeft ||
                   key == LogicalKeyboardKey.controlRight ||
@@ -769,36 +791,36 @@ class HomeView extends GetView<HomeController> {
             }
           },
           child: AlertDialog(
-          title: const Text('Assign Keyboard Shortcut'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Press any key to assign it to this pad.'),
-              const SizedBox(height: 16),
-              if (controller.pads[padIndex].keyboardShortcut != null) ...[
-                Text(
-                  'Current: ${controller.pads[padIndex].keyboardShortcut}',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () {
-                    controller.assignKeyboardShortcut(padIndex, null);
-                    Get.back();
-                  },
-                  child: const Text('Remove Shortcut'),
-                ),
+            title: const Text('Assign Keyboard Shortcut'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Press any key to assign it to this pad.'),
+                const SizedBox(height: 16),
+                if (controller.pads[padIndex].keyboardShortcut != null) ...[
+                  Text(
+                    'Current: ${controller.pads[padIndex].keyboardShortcut}',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () {
+                      controller.assignKeyboardShortcut(padIndex, null);
+                      Get.back();
+                    },
+                    child: const Text('Remove Shortcut'),
+                  ),
+                ],
               ],
+            ),
+            actions: [
+              TextButton(onPressed: Get.back, child: const Text('Cancel')),
             ],
           ),
-          actions: [
-            TextButton(onPressed: Get.back, child: const Text('Cancel')),
-          ],
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   void _showMidiDevicesDialog(BuildContext context) {
     Get.dialog(
@@ -984,9 +1006,7 @@ class HomeView extends GetView<HomeController> {
             }),
           ],
         ),
-        actions: [
-          TextButton(onPressed: Get.back, child: const Text('Done')),
-        ],
+        actions: [TextButton(onPressed: Get.back, child: const Text('Done'))],
       ),
     );
   }
@@ -1233,9 +1253,7 @@ class HomeView extends GetView<HomeController> {
             );
           }),
         ),
-        actions: [
-          TextButton(onPressed: Get.back, child: const Text('Cancel')),
-        ],
+        actions: [TextButton(onPressed: Get.back, child: const Text('Cancel'))],
       ),
     );
   }
@@ -1460,21 +1478,23 @@ class HomeView extends GetView<HomeController> {
     // Blend base color towards white when playing for a clear visual change.
     final baseColor = color.withValues(alpha: hasFile ? 1 : 0.4);
     final playingColor = const Color.fromARGB(255, 3, 165, 0); // Light Blue 300
-    final bgColor = isPlaying ? playingColor.withValues(alpha: 0.95) : baseColor;
+    final bgColor = isPlaying
+        ? playingColor.withValues(alpha: 0.95)
+        : baseColor;
 
     // Timer text
     String timerText = '';
     if (hasFile && (isPlaying || isPaused)) {
       final pos = controller.audioService.getPosition(pad.path!);
       final len = controller.audioService.getLength(pad.path!);
-      timerText = '${Formatters.formatDuration(pos)} / ${Formatters.formatDuration(len)}';
+      timerText =
+          '${Formatters.formatDuration(pos)} / ${Formatters.formatDuration(len)}';
     }
 
     // --- Waveform Data ---
-    final waveform = hasFile ? controller.audioService.getWaveform(pad.path!) : null;
-    if (hasFile && waveform == null) {
-      controller.audioService.loadWaveform(pad.path!);
-    }
+    final waveform = hasFile
+        ? controller.audioService.getWaveform(pad.path!)
+        : null;
 
     return Material(
       color: bgColor,
@@ -1501,8 +1521,9 @@ class HomeView extends GetView<HomeController> {
                 child: StreamBuilder<String>(
                   stream: controller.audioService.waveformUpdates,
                   builder: (context, snapshot) {
-                    // Re-fetch waveform if update matches path (or always for now)
-                    // Optimization: check snapshot.data == pad.path
+                    if (snapshot.hasData && snapshot.data != pad.path) {
+                      return const SizedBox();
+                    }
                     final currentWave = controller.audioService.getWaveform(
                       pad.path!,
                     );
@@ -1659,7 +1680,9 @@ class HomeView extends GetView<HomeController> {
                   : Icon(
                       !hasFile
                           ? Icons.add
-                          : (isPlaying && !isPaused ? Icons.pause : Icons.play_arrow),
+                          : (isPlaying && !isPaused
+                                ? Icons.pause
+                                : Icons.play_arrow),
                       color: Colors.white.withValues(alpha: 0.8),
                       size: 48,
                     ),
@@ -1918,17 +1941,31 @@ class HomeView extends GetView<HomeController> {
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            Obx(() => SegmentedButton<ThemeMode>(
-              segments: const [
-                ButtonSegment(value: ThemeMode.system, label: Text('System'), icon: Icon(Icons.brightness_auto)),
-                ButtonSegment(value: ThemeMode.light, label: Text('Light'), icon: Icon(Icons.light_mode)),
-                ButtonSegment(value: ThemeMode.dark, label: Text('Dark'), icon: Icon(Icons.dark_mode)),
-              ],
-              selected: {controller.themeMode.value},
-              onSelectionChanged: (Set<ThemeMode> newSelection) {
-                controller.setThemeMode(newSelection.first);
-              },
-            )),
+            Obx(
+              () => SegmentedButton<ThemeMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: ThemeMode.system,
+                    label: Text('System'),
+                    icon: Icon(Icons.brightness_auto),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.light,
+                    label: Text('Light'),
+                    icon: Icon(Icons.light_mode),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.dark,
+                    label: Text('Dark'),
+                    icon: Icon(Icons.dark_mode),
+                  ),
+                ],
+                selected: {controller.themeMode.value},
+                onSelectionChanged: (Set<ThemeMode> newSelection) {
+                  controller.setThemeMode(newSelection.first);
+                },
+              ),
+            ),
             const SizedBox(height: 24),
             const Divider(),
             const SizedBox(height: 16),
@@ -1937,17 +1974,30 @@ class HomeView extends GetView<HomeController> {
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            Obx(() => _buildInfoTile('Status:', controller.sidecarService.sidecarStatus.value)),
-            _buildInfoTile('Port:', controller.sidecarService.lastDiscoveredPort.toString()),
-            Obx(() => _buildInfoTile('WS:', controller.sidecarService.wsConnectionStatus.value)),
+            Obx(
+              () => _buildInfoTile(
+                'Status:',
+                controller.sidecarService.sidecarStatus.value,
+              ),
+            ),
+            _buildInfoTile(
+              'Port:',
+              controller.sidecarService.lastDiscoveredPort.toString(),
+            ),
+            Obx(
+              () => _buildInfoTile(
+                'WS:',
+                controller.sidecarService.wsConnectionStatus.value,
+              ),
+            ),
             Obx(() {
               final err = controller.sidecarService.lastError.value;
-              return err.isNotEmpty 
-                ? _buildInfoTile('Last Error:', err)
-                : const SizedBox.shrink();
+              return err.isNotEmpty
+                  ? _buildInfoTile('Last Error:', err)
+                  : const SizedBox.shrink();
             }),
             _buildInfoTile(
-              'Logs:', 
+              'Logs:',
               controller.sidecarService.logFilePath,
               isCopyable: true,
             ),
@@ -2037,7 +2087,7 @@ class HomeView extends GetView<HomeController> {
   void _showFaderSettings(BuildContext context, int index) {
     final fader = controller.faders[index];
     StreamSubscription? sub;
-    
+
     Get.dialog(
       AlertDialog(
         title: Text('Fader: ${fader.name}'),
@@ -2048,20 +2098,26 @@ class HomeView extends GetView<HomeController> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Assign MIDI CC to this fader:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const Text(
+                  'Assign MIDI CC to this fader:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
                 const SizedBox(height: 12),
                 Obx(() {
                   final currentCc = controller.faders[index].midiCc;
                   return Column(
                     children: [
                       Text(
-                        currentCc != null ? 'Assigned: ${MidiNoteEvent.getDisplayNameForId(currentCc)}' : 'No CC assigned',
+                        currentCc != null
+                            ? 'Assigned: ${MidiNoteEvent.getDisplayNameForId(currentCc)}'
+                            : 'No CC assigned',
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                       if (currentCc != null) ...[
                         const SizedBox(height: 8),
                         TextButton(
-                          onPressed: () => controller.assignFaderMidiCc(index, null),
+                          onPressed: () =>
+                              controller.assignFaderMidiCc(index, null),
                           child: const Text('Remove Assignment'),
                         ),
                       ],
@@ -2069,9 +2125,17 @@ class HomeView extends GetView<HomeController> {
                   );
                 }),
                 const SizedBox(height: 8),
-                const Center(child: Text('Move a hardware fader to assign...', style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic))),
+                const Center(
+                  child: Text(
+                    'Move a hardware fader to assign...',
+                    style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic),
+                  ),
+                ),
                 const Divider(height: 32),
-                const Text('Manage Linked Pads:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const Text(
+                  'Manage Linked Pads:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
                 const SizedBox(height: 12),
                 Obx(() {
                   final pads = controller.pads;
@@ -2082,10 +2146,16 @@ class HomeView extends GetView<HomeController> {
                       final p = pads[pIdx];
                       final isLinked = p.faderId == fader.id;
                       return ChoiceChip(
-                        label: Text(p.name, style: const TextStyle(fontSize: 10)),
+                        label: Text(
+                          p.name,
+                          style: const TextStyle(fontSize: 10),
+                        ),
                         selected: isLinked,
                         onSelected: (val) {
-                          controller.assignPadToFader(pIdx, val ? fader.id : null);
+                          controller.assignPadToFader(
+                            pIdx,
+                            val ? fader.id : null,
+                          );
                         },
                       );
                     }),
@@ -2149,7 +2219,11 @@ class _MixerPanel extends StatelessWidget {
             children: [
               const Text(
                 'MIXER',
-                style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.0),
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.0,
+                ),
               ),
               IconButton(
                 icon: const Icon(Icons.add, size: 16),
@@ -2167,7 +2241,10 @@ class _MixerPanel extends StatelessWidget {
               return Center(
                 child: Text(
                   'No faders',
-                  style: TextStyle(color: scheme.onSurface.withValues(alpha: 0.5), fontSize: 10),
+                  style: TextStyle(
+                    color: scheme.onSurface.withValues(alpha: 0.5),
+                    fontSize: 10,
+                  ),
                 ),
               );
             }
@@ -2220,13 +2297,20 @@ class _FaderWidget extends StatelessWidget {
                 Expanded(
                   child: Text(
                     fader.name.toUpperCase(),
-                    style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
                   ),
                 ),
-                Icon(Icons.settings, size: 10, color: scheme.onSurface.withValues(alpha: 0.5)),
+                Icon(
+                  Icons.settings,
+                  size: 10,
+                  color: scheme.onSurface.withValues(alpha: 0.5),
+                ),
               ],
             ),
           ),
@@ -2278,7 +2362,7 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
   double _displayedR = 0.0;
   double _peakHoldL = 0.0;
   double _peakHoldR = 0.0;
-  
+
   // For peak hold reset
   int _peakHoldCounter = 0;
 
@@ -2300,12 +2384,12 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
     final svc = widget.controller.audioService;
     // We use peak values for the main bar as they are safer for digital clipping detection
     // RMS could be an inner darker bar if desired, but let's stick to Peak for main visibility.
-    final targetL = svc.masterPeakL.value; 
+    final targetL = svc.masterPeakL.value;
     final targetR = svc.masterPeakR.value;
 
     // Decay settings
     const decayFactor = 0.85; // How fast the bar drops
-    const riseFactor = 1.0;   // Instant rise
+    const riseFactor = 1.0; // Instant rise
 
     // Apply ballistics
     if (targetL >= _displayedL) {
@@ -2331,11 +2415,12 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
     }
 
     _peakHoldCounter++;
-    if (_peakHoldCounter > 60) { // Hold for ~1 sec
+    if (_peakHoldCounter > 60) {
+      // Hold for ~1 sec
       _peakHoldL *= 0.95;
       _peakHoldR *= 0.95;
     }
-    
+
     // Clamp
     if (_displayedL < 0.001) _displayedL = 0;
     if (_displayedR < 0.001) _displayedR = 0;
@@ -2369,16 +2454,18 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
                   letterSpacing: 1.0,
                 ),
               ),
-               // Numerical readout of volume
-               Obx(() => Text(
-                 '${(widget.controller.audioService.masterVolume.value * 100).toInt()}%',
-                 style: TextStyle(
-                   color: scheme.onSurface, 
-                   fontSize: 10, 
-                   fontFamily: "Courier",
-                   fontWeight: FontWeight.bold,
-                 ),
-               )),
+              // Numerical readout of volume
+              Obx(
+                () => Text(
+                  '${(widget.controller.audioService.masterVolume.value * 100).toInt()}%',
+                  style: TextStyle(
+                    color: scheme.onSurface,
+                    fontSize: 10,
+                    fontFamily: "Courier",
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -2399,13 +2486,16 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
                             enabledThumbRadius: 10,
                             elevation: 2,
                           ),
-                          overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+                          overlayShape: const RoundSliderOverlayShape(
+                            overlayRadius: 18,
+                          ),
                           activeTrackColor: scheme.primary,
                           inactiveTrackColor: scheme.surfaceContainerHighest,
                           thumbColor: scheme.primary,
                         ),
                         child: Slider(
-                          value: widget.controller.audioService.masterVolume.value,
+                          value:
+                              widget.controller.audioService.masterVolume.value,
                           onChanged: (val) {
                             widget.controller.audioService.setMasterVolume(val);
                           },
@@ -2424,10 +2514,20 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
                         child: Column(
                           children: [
                             Expanded(
-                              child: _LEDMeterBar(level: _displayedL, peak: _peakHoldL),
+                              child: _LEDMeterBar(
+                                level: _displayedL,
+                                peak: _peakHoldL,
+                              ),
                             ),
                             const SizedBox(height: 4),
-                            Text("L", style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 9, fontWeight: FontWeight.bold)),
+                            Text(
+                              "L",
+                              style: TextStyle(
+                                color: scheme.onSurfaceVariant,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -2437,10 +2537,20 @@ class _MasterAudioMeterState extends State<_MasterAudioMeter> {
                         child: Column(
                           children: [
                             Expanded(
-                              child: _LEDMeterBar(level: _displayedR, peak: _peakHoldR),
+                              child: _LEDMeterBar(
+                                level: _displayedR,
+                                peak: _peakHoldR,
+                              ),
                             ),
                             const SizedBox(height: 4),
-                            Text("R", style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 9, fontWeight: FontWeight.bold)),
+                            Text(
+                              "R",
+                              style: TextStyle(
+                                color: scheme.onSurfaceVariant,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -2469,7 +2579,7 @@ class _LEDMeterBar extends StatelessWidget {
     return LayoutBuilder(
       builder: (ctx, constraints) {
         final maxH = constraints.maxHeight;
-        
+
         return ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Stack(
@@ -2480,7 +2590,7 @@ class _LEDMeterBar extends StatelessWidget {
                 width: double.infinity,
                 color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
               ),
-              
+
               // Draw gradient/segments
               Container(
                 height: maxH * level.clamp(0.0, 1.0),
@@ -2511,26 +2621,32 @@ class _LEDMeterBar extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: scheme.onSurface,
                       boxShadow: [
-                        BoxShadow(color: scheme.onSurface.withValues(alpha: 0.3), blurRadius: 2),
+                        BoxShadow(
+                          color: scheme.onSurface.withValues(alpha: 0.3),
+                          blurRadius: 2,
+                        ),
                       ],
                     ),
                   ),
                 ),
-                
+
               // Grid lines overlay for "segments" feel
               Column(
-                children: List.generate(12, (index) => Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(
-                          color: scheme.surface.withValues(alpha: 0.8), 
-                          width: 1.5
+                children: List.generate(
+                  12,
+                  (index) => Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(
+                            color: scheme.surface.withValues(alpha: 0.8),
+                            width: 1.5,
+                          ),
                         ),
                       ),
                     ),
                   ),
-                )),
+                ),
               ),
             ],
           ),

@@ -9,7 +9,6 @@ import 'package:padvibe/app/service/storage_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -36,6 +35,7 @@ class HomeController extends GetxController {
   final gridColumns = 5.obs; // Default to 5 columns
 
   bool _isSwitchingTab = false;
+  bool _isWaveformBatchLoading = false;
 
   // Theme Settings
   final themeMode = ThemeMode.system.obs;
@@ -44,7 +44,8 @@ class HomeController extends GetxController {
   final pads = <Pad>[for (int i = 1; i <= 20; i++) Pad(name: 'Pad $i')].obs;
 
   final remainingSeconds = 0.0.obs;
-  final heartbeat = 0.obs; // Added to trigger UI updates even for background pads
+  final heartbeat =
+      0.obs; // Added to trigger UI updates even for background pads
   final masterVolume = 1.0.obs; // Master volume control (0.0 to 1.0)
   Timer? _ticker;
 
@@ -176,7 +177,9 @@ class HomeController extends GetxController {
         if (index != -1) playPad(index);
       } else if (event.type == MidiEventType.controlChange) {
         // 1. Check if this CC is a Pad Trigger (Momentary CC)
-        final triggerIndex = pads.indexWhere((p) => p.midiNote == event.triggerId);
+        final triggerIndex = pads.indexWhere(
+          (p) => p.midiNote == event.triggerId,
+        );
         if (triggerIndex != -1) {
           if (event.velocity > 0) playPad(triggerIndex);
           return; // Stop processing if handled as trigger
@@ -234,17 +237,17 @@ class HomeController extends GetxController {
   Future<void> _sanitizeCurrentPads() async {
     bool changed = false;
     debugPrint('DEBUG: Starting pad path sanitization...');
-    
+
     final appDir = await getApplicationSupportDirectory();
     final audioLibDir = p.join(appDir.path, 'pads_audio');
 
     for (var i = 0; i < pads.length; i++) {
       final oldPath = pads[i].path;
       if (oldPath == null) continue;
-      
+
       var exists = kIsWeb ? true : File(oldPath).existsSync();
       debugPrint('DEBUG: Checking pad $i path: $oldPath (Exists: $exists)');
-      
+
       if (!exists && !kIsWeb) {
         // Path broken. Try to relocate in local library
         final fileName = p.basename(oldPath);
@@ -255,7 +258,7 @@ class HomeController extends GetxController {
           changed = true;
           continue;
         }
-        
+
         debugPrint('DEBUG: Path missing, clearing pad $i');
         pads[i] = pads[i].copyWith(path: null, clearPath: true);
         changed = true;
@@ -263,18 +266,8 @@ class HomeController extends GetxController {
       }
       if (!kIsWeb) {
         final padPath = pads[i].path;
-        if (padPath == null) continue;
-        
-        final inLib = await storage.isInAudioLibrary(padPath);
-        if (!inLib) {
-          try {
-            final dst = await storage.importAudioFile(padPath);
-            pads[i] = pads[i].copyWith(path: dst);
-            changed = true;
-          } catch (_) {
-            pads[i] = pads[i].copyWith(path: null);
-            changed = true;
-          }
+        if (padPath != null) {
+          unawaited(_copyAndSwapPadPathInBackground(i, padPath));
         }
       }
     }
@@ -285,19 +278,25 @@ class HomeController extends GetxController {
   }
 
   void _loadAllWaveforms() async {
-    for (int i = 0; i < pads.length; i++) {
-      final pad = pads[i];
-      if (pad.path != null) {
-        // Only show loading if we don't have it cached yet
-        if (audioService.getWaveform(pad.path!) == null) {
-          pads[i] = pads[i].copyWith(isLoading: true);
-          try {
-            await audioService.loadWaveform(pad.path!);
-          } finally {
-            pads[i] = pads[i].copyWith(isLoading: false);
+    if (_isWaveformBatchLoading) return;
+    _isWaveformBatchLoading = true;
+    try {
+      for (int i = 0; i < pads.length; i++) {
+        final pad = pads[i];
+        if (pad.path != null) {
+          // Only show loading if we don't have it cached yet
+          if (audioService.getWaveform(pad.path!) == null) {
+            pads[i] = pads[i].copyWith(isLoading: true);
+            try {
+              await audioService.loadWaveform(pad.path!);
+            } finally {
+              pads[i] = pads[i].copyWith(isLoading: false);
+            }
           }
         }
       }
+    } finally {
+      _isWaveformBatchLoading = false;
     }
   }
 
@@ -396,7 +395,7 @@ class HomeController extends GetxController {
 
     // Set loading state
     pads[index] = pads[index].copyWith(isLoading: true);
-    
+
     try {
       await audioService.playSound(
         path,
@@ -608,17 +607,16 @@ class HomeController extends GetxController {
   // --- Fader Management ---
 
   void addFader(String name) {
-    faders.add(Fader(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: name,
-    ));
+    faders.add(
+      Fader(id: DateTime.now().millisecondsSinceEpoch.toString(), name: name),
+    );
     _saveFaders();
   }
 
   void removeFader(int index) {
     final faderId = faders[index].id;
     faders.removeAt(index);
-    
+
     // Unlink pads
     for (int g = 0; g < groups.length; g++) {
       final groupPads = groups[g].pads;
@@ -654,9 +652,11 @@ class HomeController extends GetxController {
         if (groupPads[p].faderId == fader.id) {
           groupPads[p] = groupPads[p].copyWith(volume: v);
           changed = true;
-          
+
           // If this pad is in the current group and is playing, update its live volume
-          if (g == currentGroupIndex.value && groupPads[p].path != null && audioService.isPlaying(groupPads[p].path!)) {
+          if (g == currentGroupIndex.value &&
+              groupPads[p].path != null &&
+              audioService.isPlaying(groupPads[p].path!)) {
             audioService.setVolume(groupPads[p].path!, v);
           }
         }
@@ -685,9 +685,11 @@ class HomeController extends GetxController {
     );
     _updateCurrentGroup();
     _saveGroups();
-    
+
     // Update live volume if playing
-    if (fader != null && pads[padIndex].path != null && audioService.isPlaying(pads[padIndex].path!)) {
+    if (fader != null &&
+        pads[padIndex].path != null &&
+        audioService.isPlaying(pads[padIndex].path!)) {
       audioService.setVolume(pads[padIndex].path!, fader.volume);
     }
   }
@@ -710,20 +712,16 @@ class HomeController extends GetxController {
     pads[index] = pads[index].copyWith(isLoading: true);
 
     try {
-      String finalPath = path;
-      if (!kIsWeb) {
-        try {
-          finalPath = await storage.importAudioFile(path);
-        } catch (_) {
-          return;
-        }
-      }
-      pads[index] = pads[index].copyWith(path: finalPath);
+      final sourcePath = path;
+      pads[index] = pads[index].copyWith(path: sourcePath);
       _updateCurrentGroup();
       await _saveGroups();
-      
-      // Explicitly load waveform to ensure it's ready
-      await audioService.loadWaveform(finalPath);
+
+      // Load from source immediately for fast UX.
+      await audioService.loadWaveform(sourcePath);
+      if (!kIsWeb) {
+        unawaited(_copyAndSwapPadPathInBackground(index, sourcePath));
+      }
     } finally {
       pads[index] = pads[index].copyWith(isLoading: false);
     }
@@ -747,16 +745,13 @@ class HomeController extends GetxController {
       if (idx >= available.length) break;
       if (f.path == null) continue;
 
-      String finalPath = f.path!;
-      if (!kIsWeb) {
-        try {
-          finalPath = await storage.importAudioFile(f.path!);
-        } catch (_) {
-          continue;
-        }
-      }
       final slot = available[idx++];
-      pads[slot] = pads[slot].copyWith(path: finalPath);
+      final sourcePath = f.path!;
+      pads[slot] = pads[slot].copyWith(path: sourcePath);
+      unawaited(audioService.loadWaveform(sourcePath));
+      if (!kIsWeb) {
+        unawaited(_copyAndSwapPadPathInBackground(slot, sourcePath));
+      }
     }
     _updateCurrentGroup();
     await _saveGroups();
@@ -811,24 +806,70 @@ class HomeController extends GetxController {
     pads[index] = pads[index].copyWith(isLoading: true);
 
     try {
-      // drag-and-drop path assignment; copy to app library
-      String finalPath = data;
-      if (!kIsWeb) {
-        try {
-          finalPath = await storage.importAudioFile(data);
-        } catch (_) {
-          return;
-        }
-      }
-      pads[index] = pads[index].copyWith(path: finalPath);
+      // Drag-and-drop assignment: use source path immediately, copy in background.
+      final sourcePath = data;
+      pads[index] = pads[index].copyWith(path: sourcePath);
       _updateCurrentGroup();
       await _saveGroups();
 
-      // Explicitly load waveform
-      await audioService.loadWaveform(finalPath);
+      await audioService.loadWaveform(sourcePath);
+      if (!kIsWeb) {
+        unawaited(_copyAndSwapPadPathInBackground(index, sourcePath));
+      }
     } finally {
       pads[index] = pads[index].copyWith(isLoading: false);
     }
+  }
+
+  Future<void> _copyAndSwapPadPathInBackground(
+    int index,
+    String sourcePath,
+  ) async {
+    if (kIsWeb) return;
+    if (index < 0 || index >= pads.length) return;
+    if (pads[index].path != sourcePath) return;
+
+    final inLib = await storage.isInAudioLibrary(sourcePath);
+    if (inLib) return;
+
+    String copiedPath;
+    try {
+      copiedPath = await storage.importAudioFile(sourcePath);
+    } catch (_) {
+      return;
+    }
+
+    _swapPadPathWhenIdle(index, sourcePath, copiedPath, retries: 0);
+  }
+
+  void _swapPadPathWhenIdle(
+    int index,
+    String sourcePath,
+    String copiedPath, {
+    required int retries,
+  }) {
+    if (index < 0 || index >= pads.length) return;
+    if (pads[index].path != sourcePath) return;
+
+    if (audioService.isPlaying(sourcePath)) {
+      if (retries >= 10) return;
+      unawaited(
+        Future.delayed(const Duration(seconds: 2), () {
+          _swapPadPathWhenIdle(
+            index,
+            sourcePath,
+            copiedPath,
+            retries: retries + 1,
+          );
+        }),
+      );
+      return;
+    }
+
+    pads[index] = pads[index].copyWith(path: copiedPath);
+    _updateCurrentGroup();
+    unawaited(_saveGroups());
+    unawaited(audioService.loadWaveform(copiedPath));
   }
 
   // --- Settings ---

@@ -13,6 +13,7 @@ midi_engine = None # Initialized in main
 
 # Clients
 clients = set()
+verbose_command_logs = os.environ.get("PADVIBE_VERBOSE_COMMAND_LOGS", "0") == "1"
 
 def cleanup():
     """Performs cleanup of engines before exiting."""
@@ -76,7 +77,8 @@ async def handle_websocket(websocket):
     clients.add(websocket)
     try:
         async for message in websocket:
-            print(f"DEBUG RECEIVED COMMAND: {message[:200]}", flush=True)
+            if verbose_command_logs:
+                print(f"DEBUG RECEIVED COMMAND: {message[:200]}", flush=True)
             try:
                 data = json.loads(message)
                 command = data.get("command")

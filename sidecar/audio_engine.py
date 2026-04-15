@@ -16,6 +16,8 @@ class AudioEngine:
         self.mix_lock = threading.Lock()
         self._initialized = False
         self.device_cache = {}
+        self.waveform_cache = {}
+        self.waveform_cache_limit = 256
 
     def _ensure_initialized(self):
         if not self._initialized:
@@ -317,15 +319,7 @@ class AudioEngine:
     def stop(self, stream_id):
         with self.lock:
             if stream_id in self.streams:
-                s = self.streams[stream_id]
-                try:
-                    s["stream"].stop()
-                    s["stream"].close()
-                    if not s["ctx"]["is_preloaded"]:
-                        s["ctx"]["file"].close()
-                except Exception as e:
-                    print(f"Error stopping stream {stream_id}: {e}")
-                del self.streams[stream_id]
+                self._cleanup_stream_locked(stream_id, self.streams[stream_id])
 
     def stop_all(self):
         with self.lock:
@@ -340,6 +334,7 @@ class AudioEngine:
     def get_levels(self):
         """Returns aggregated Master Levels and a 16-band spectrum."""
         with self.lock:
+            self._prune_finished_streams_locked()
             active_ids = list(self.streams.keys())
         
         rms_l_pow = 0.0
@@ -371,6 +366,39 @@ class AudioEngine:
             min(1.0, peak_r_max),
             [] # Spectrum placeholder
         )
+
+    def _cleanup_stream_locked(self, stream_id, stream_obj):
+        try:
+            stream_obj["stream"].stop()
+        except Exception:
+            pass
+        try:
+            stream_obj["stream"].close()
+        except Exception:
+            pass
+        try:
+            stream_obj["ctx"]["file"].close()
+        except Exception:
+            pass
+
+        self.stream_levels.pop(stream_id, None)
+        self.streams.pop(stream_id, None)
+
+    def _prune_finished_streams_locked(self):
+        stale_ids = []
+        for sid, stream_obj in list(self.streams.items()):
+            try:
+                finished = bool(stream_obj["ctx"].get("finished", False))
+                active = bool(stream_obj["stream"].active)
+                if finished or not active:
+                    stale_ids.append(sid)
+            except Exception:
+                stale_ids.append(sid)
+
+        for sid in stale_ids:
+            stream_obj = self.streams.get(sid)
+            if stream_obj is not None:
+                self._cleanup_stream_locked(sid, stream_obj)
 
     def set_volume(self, stream_id, volume):
         with self.lock:
@@ -421,6 +449,12 @@ class AudioEngine:
     def get_waveform(self, file_path, points=100):
         """Generates a simplified waveform using fast block-based reading."""
         try:
+            stat = os.stat(file_path)
+            cache_key = (file_path, int(points), int(stat.st_mtime), stat.st_size)
+            cached = self.waveform_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
             with sf.SoundFile(file_path) as f:
                 frames = f.frames
                 if frames == 0:
@@ -446,7 +480,14 @@ class AudioEngine:
                     waveform = [v / peak for v in waveform]
                 
                 duration = frames / f.samplerate
-                return waveform, duration
+                result = (waveform, duration)
+                if len(self.waveform_cache) >= self.waveform_cache_limit:
+                    # Drop oldest inserted key (dict preserves insertion order).
+                    oldest = next(iter(self.waveform_cache), None)
+                    if oldest is not None:
+                        del self.waveform_cache[oldest]
+                self.waveform_cache[cache_key] = result
+                return result
 
         except Exception as e:
             print(f"Error generating waveform: {e}")
