@@ -138,7 +138,7 @@ async def handle_websocket(websocket):
                         stream_id, duration = await asyncio.to_thread(
                             audio_engine.play,
                             file_path, device_id, volume, loop,
-                            on_finished=lambda: on_finished(stream_id),
+                            on_finished=on_finished,
                             output_channels=output_channels,
                             filter_type=filter_type,
                             filter_freq=filter_freq

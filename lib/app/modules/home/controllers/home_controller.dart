@@ -35,7 +35,6 @@ class HomeController extends GetxController {
   final gridColumns = 5.obs; // Default to 5 columns
 
   bool _isSwitchingTab = false;
-  bool _isWaveformBatchLoading = false;
 
   // Theme Settings
   final themeMode = ThemeMode.system.obs;
@@ -278,25 +277,30 @@ class HomeController extends GetxController {
   }
 
   void _loadAllWaveforms() async {
-    if (_isWaveformBatchLoading) return;
-    _isWaveformBatchLoading = true;
-    try {
-      for (int i = 0; i < pads.length; i++) {
-        final pad = pads[i];
-        if (pad.path != null) {
-          // Only show loading if we don't have it cached yet
-          if (audioService.getWaveform(pad.path!) == null) {
-            pads[i] = pads[i].copyWith(isLoading: true);
-            try {
-              await audioService.loadWaveform(pad.path!);
-            } finally {
-              pads[i] = pads[i].copyWith(isLoading: false);
-            }
-          }
+    final targets = <MapEntry<int, String>>[];
+    for (int i = 0; i < pads.length; i++) {
+      final path = pads[i].path;
+      if (path != null && audioService.getWaveform(path) == null) {
+        targets.add(MapEntry(i, path));
+      }
+    }
+
+    for (final target in targets) {
+      final i = target.key;
+      final path = target.value;
+
+      if (i < 0 || i >= pads.length || pads[i].path != path) {
+        continue;
+      }
+
+      pads[i] = pads[i].copyWith(isLoading: true);
+      try {
+        await audioService.loadWaveform(path);
+      } finally {
+        if (i >= 0 && i < pads.length && pads[i].path == path) {
+          pads[i] = pads[i].copyWith(isLoading: false);
         }
       }
-    } finally {
-      _isWaveformBatchLoading = false;
     }
   }
 

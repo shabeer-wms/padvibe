@@ -137,7 +137,7 @@ class AudioEngine:
                     outdata.fill(0)
                     if not ctx["on_finished_called"] and ctx["on_finished"]:
                         ctx["on_finished_called"] = True
-                        ctx["on_finished"]()
+                        ctx["on_finished"](stream_id)
                     raise sd.CallbackStop
 
                 # Initialize data_chunk as empty with correct shape
@@ -270,14 +270,14 @@ class AudioEngine:
                     if write_len < len(outdata) and ctx["finished"]:
                         if not ctx["on_finished_called"] and ctx["on_finished"]:
                             ctx["on_finished_called"] = True
-                            ctx["on_finished"]()
+                            ctx["on_finished"](stream_id)
                         raise sd.CallbackStop
                 else:
                     self.stream_levels[stream_id] = (0.0, 0.0, 0.0, 0.0)
                     if ctx["finished"]:
                         if not ctx["on_finished_called"] and ctx["on_finished"]:
                             ctx["on_finished_called"] = True
-                            ctx["on_finished"]()
+                            ctx["on_finished"](stream_id)
                         raise sd.CallbackStop
 
             try:

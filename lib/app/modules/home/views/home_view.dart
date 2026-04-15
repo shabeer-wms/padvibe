@@ -1521,9 +1521,6 @@ class HomeView extends GetView<HomeController> {
                 child: StreamBuilder<String>(
                   stream: controller.audioService.waveformUpdates,
                   builder: (context, snapshot) {
-                    if (snapshot.hasData && snapshot.data != pad.path) {
-                      return const SizedBox();
-                    }
                     final currentWave = controller.audioService.getWaveform(
                       pad.path!,
                     );
