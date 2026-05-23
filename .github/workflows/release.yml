@@ -1,0 +1,101 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: sidecar/requirements.txt
+
+      - name: Install sidecar dependencies
+        run: pip install pyinstaller -r sidecar/requirements.txt
+
+      - name: Build sidecar binary
+        run: |
+          rm -rf sidecar/dist
+          python -m PyInstaller \
+            --onefile \
+            --distpath sidecar/dist \
+            --name midi_server \
+            --hidden-import='mido.backends.rtmidi' \
+            sidecar/midi_server.py
+          codesign --force --deep --sign - sidecar/dist/midi_server
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Build macOS app
+        run: flutter build macos --release
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Parse version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create DMG
+        id: dmg
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          DMG_NAME="PadVibe-${VERSION}-Installer.dmg"
+          APP_PATH=$(find build/macos/Build/Products/Release -name "*.app" -maxdepth 1)
+          APP_NAME=$(basename "$APP_PATH")
+
+          STAGING="build/macos/staging"
+          mkdir -p "$STAGING"
+          cp -r "$APP_PATH" "$STAGING/"
+
+          mkdir -p build/macos/installer
+          create-dmg \
+            --volname "PadVibe Installer" \
+            --volicon "assets/logo/512-mac.png" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "$APP_NAME" 150 190 \
+            --hide-extension "$APP_NAME" \
+            --app-drop-link 450 185 \
+            "build/macos/installer/$DMG_NAME" \
+            "$STAGING" \
+          || hdiutil create \
+            -volname "PadVibe" \
+            -srcfolder "$STAGING" \
+            -ov -format UDZO \
+            "build/macos/installer/$DMG_NAME"
+
+          rm -rf "$STAGING"
+          echo "dmg_path=build/macos/installer/$DMG_NAME" >> "$GITHUB_OUTPUT"
+          echo "dmg_name=$DMG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "PadVibe v${VERSION}" \
+            --generate-notes \
+            "${{ steps.dmg.outputs.dmg_path }}#${{ steps.dmg.outputs.dmg_name }}"

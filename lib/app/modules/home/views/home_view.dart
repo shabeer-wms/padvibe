@@ -269,14 +269,11 @@ class HomeView extends GetView<HomeController> {
                   children: [
                     Expanded(
                       child: Obx(() {
-                        // Read the ticker to trigger rebuilds for progress bars.
-                        controller.remainingSeconds.value;
-                        controller
-                            .heartbeat
-                            .value; // Ensures background pads update too
-                        // Also observe active handles for immediate play/pause updates
+                        // Reactive to pad list mutations (toggle loop, assign file, etc.)
+                        controller.pads.length;
+                        // Reactive to play/pause state changes
                         controller.audioService.activeHandles.length;
-                        // Also observe manual force updates (e.g. seeking while paused)
+                        // Reactive to manual seeks while paused
                         controller.forceUpdate.value;
                         return Padding(
                           padding: const EdgeInsets.all(12),
@@ -408,31 +405,29 @@ class HomeView extends GetView<HomeController> {
   }
 
   Widget _buildPadItem(BuildContext context, int index, List<Color> colors) {
-    final pad = controller.pads[index].obs;
+    final pad = controller.pads[index];
     final color = colors[index % colors.length];
-    final hasFile = pad.value.path != null;
-    final fileName = hasFile ? pad.value.path!.split('/').last : 'Empty';
+    final hasFile = pad.path != null;
+    final fileName = hasFile ? pad.path!.split('/').last : 'Empty';
 
-    return Obx(
-      () => DropTarget(
-        onDragDone: (detail) {
-          if (detail.files.isEmpty) return;
-          final f = detail.files.first;
-          if (!f.name.toLowerCase().endsWith('.mp3') &&
-              !f.name.toLowerCase().endsWith('.wav') &&
-              !f.name.toLowerCase().endsWith('.ogg') &&
-              !f.name.toLowerCase().endsWith('.flac') &&
-              !f.name.toLowerCase().endsWith('.aac') &&
-              !f.name.toLowerCase().endsWith('.m4a')) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Unsupported file type: ${f.name}')),
-            );
-            return;
-          }
-          controller.assignFilePathToPad(index, f.path);
-        },
-        child: _pad(color, hasFile, index, pad.value, fileName, context),
-      ),
+    return DropTarget(
+      onDragDone: (detail) {
+        if (detail.files.isEmpty) return;
+        final f = detail.files.first;
+        if (!f.name.toLowerCase().endsWith('.mp3') &&
+            !f.name.toLowerCase().endsWith('.wav') &&
+            !f.name.toLowerCase().endsWith('.ogg') &&
+            !f.name.toLowerCase().endsWith('.flac') &&
+            !f.name.toLowerCase().endsWith('.aac') &&
+            !f.name.toLowerCase().endsWith('.m4a')) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Unsupported file type: ${f.name}')),
+          );
+          return;
+        }
+        controller.assignFilePathToPad(index, f.path);
+      },
+      child: _pad(color, hasFile, index, pad, fileName, context),
     );
   }
 
@@ -1462,16 +1457,6 @@ class HomeView extends GetView<HomeController> {
     String fileName,
     BuildContext context,
   ) {
-    double? progress;
-    if (hasFile) {
-      final len = controller.audioService.getLength(pad.path!);
-      if (len.inMilliseconds > 0) {
-        final pos = controller.audioService.getPosition(pad.path!);
-        progress = pos.inMilliseconds / len.inMilliseconds;
-      } else {
-        progress = 0.0;
-      }
-    }
     final isPlaying = hasFile && controller.audioService.isPlaying(pad.path!);
     final isPaused = hasFile && controller.audioService.isPaused(pad.path!);
 
@@ -1481,15 +1466,6 @@ class HomeView extends GetView<HomeController> {
     final bgColor = isPlaying
         ? playingColor.withValues(alpha: 0.95)
         : baseColor;
-
-    // Timer text
-    String timerText = '';
-    if (hasFile && (isPlaying || isPaused)) {
-      final pos = controller.audioService.getPosition(pad.path!);
-      final len = controller.audioService.getLength(pad.path!);
-      timerText =
-          '${Formatters.formatDuration(pos)} / ${Formatters.formatDuration(len)}';
-    }
 
     // --- Waveform Data ---
     final waveform = hasFile
@@ -1532,7 +1508,7 @@ class HomeView extends GetView<HomeController> {
                         painter: WaveformPainter(
                           data: currentWave,
                           color: Colors.white.withValues(alpha: 0.2),
-                          progress: progress ?? 0.0,
+                          progress: 0.0,
                         ),
                       ),
                     );
@@ -1699,97 +1675,13 @@ class HomeView extends GetView<HomeController> {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: Colors.white70, fontSize: 13),
                   ),
-                  if (timerText.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      timerText,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        fontFeatures: [FontFeature.tabularFigures()],
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 4),
-                  if (hasFile) ...[
-                    SizedBox(
-                      height: 20,
-                      child: SliderTheme(
-                        data: SliderTheme.of(Get.context!).copyWith(
-                          thumbShape: const RoundSliderThumbShape(
-                            enabledThumbRadius: 6,
-                          ),
-                          overlayShape: const RoundSliderOverlayShape(
-                            overlayRadius: 10,
-                          ),
-                          trackHeight: 2,
-                          activeTrackColor: Colors.white,
-                          inactiveTrackColor: Colors.white24,
-                          thumbColor: Colors.white,
-                          overlayColor: Colors.white.withValues(alpha: 0.2),
-                        ),
-                        child: Slider(
-                          value: (progress ?? 0.0).clamp(0.0, 1.0),
-                          onChanged: (v) => controller.seekPad(index, v),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          IconButton(
-                            icon: const Icon(
-                              Icons.replay,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                            onPressed: () => controller.restartPad(index),
-                            tooltip: 'Restart',
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                          IconButton(
-                            icon: const Icon(
-                              Icons.replay_5,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                            onPressed: () => controller.skipBackward(index),
-                            tooltip: '-5s',
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                          IconButton(
-                            icon: const Icon(
-                              Icons.forward_5,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                            onPressed: () => controller.skipForward(index),
-                            tooltip: '+5s',
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                          if (isPlaying || isPaused)
-                            IconButton(
-                              icon: const Icon(
-                                Icons.stop,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                              onPressed: () => controller.stopPad(index),
-                              tooltip: 'Stop',
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ] else
+                  if (hasFile)
+                    _PadProgressWidget(
+                      path: pad.path!,
+                      controller: controller,
+                      index: index,
+                    )
+                  else
                     const Padding(
                       padding: EdgeInsets.only(top: 8),
                       child: Text(
@@ -2649,6 +2541,151 @@ class _LEDMeterBar extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _PadProgressWidget extends StatefulWidget {
+  final String path;
+  final HomeController controller;
+  final int index;
+
+  const _PadProgressWidget({
+    required this.path,
+    required this.controller,
+    required this.index,
+  });
+
+  @override
+  State<_PadProgressWidget> createState() => _PadProgressWidgetState();
+}
+
+class _PadProgressWidgetState extends State<_PadProgressWidget> {
+  Timer? _timer;
+  double _progress = 0.0;
+  String _timerText = '';
+  bool _isActive = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 16), (_) => _tick());
+  }
+
+  void _tick() {
+    if (!mounted) return;
+    final svc = widget.controller.audioService;
+    final len = svc.getLength(widget.path);
+    final pos = svc.getPosition(widget.path);
+    final isPlaying = svc.isPlaying(widget.path);
+    final isPaused = svc.isPaused(widget.path);
+    final active = isPlaying || isPaused;
+
+    final newProgress = len.inMilliseconds > 0
+        ? (pos.inMilliseconds / len.inMilliseconds).clamp(0.0, 1.0)
+        : 0.0;
+    final newTimerText = active
+        ? '${Formatters.formatDuration(pos)} / ${Formatters.formatDuration(len)}'
+        : '';
+
+    if (newProgress != _progress ||
+        newTimerText != _timerText ||
+        active != _isActive) {
+      setState(() {
+        _progress = newProgress;
+        _timerText = newTimerText;
+        _isActive = active;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final index = widget.index;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (_timerText.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(
+            _timerText,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+        const SizedBox(height: 4),
+        SizedBox(
+          height: 20,
+          child: SliderTheme(
+            data: SliderTheme.of(Get.context!).copyWith(
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              overlayShape:
+                  const RoundSliderOverlayShape(overlayRadius: 10),
+              trackHeight: 2,
+              activeTrackColor: Colors.white,
+              inactiveTrackColor: Colors.white24,
+              thumbColor: Colors.white,
+              overlayColor: Colors.white.withValues(alpha: 0.2),
+            ),
+            child: Slider(
+              value: _progress.clamp(0.0, 1.0),
+              onChanged: (v) => controller.seekPad(index, v),
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.replay, color: Colors.white, size: 20),
+                onPressed: () => controller.restartPad(index),
+                tooltip: 'Restart',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+              IconButton(
+                icon:
+                    const Icon(Icons.replay_5, color: Colors.white, size: 20),
+                onPressed: () => controller.skipBackward(index),
+                tooltip: '-5s',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+              IconButton(
+                icon:
+                    const Icon(Icons.forward_5, color: Colors.white, size: 20),
+                onPressed: () => controller.skipForward(index),
+                tooltip: '+5s',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+              if (_isActive)
+                IconButton(
+                  icon: const Icon(Icons.stop, color: Colors.white, size: 20),
+                  onPressed: () => controller.stopPad(index),
+                  tooltip: 'Stop',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

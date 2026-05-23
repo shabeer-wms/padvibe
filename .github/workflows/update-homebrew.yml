@@ -1,0 +1,48 @@
+name: Update Homebrew Tap
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-tap:
+    runs-on: macos-latest
+
+    steps:
+      - name: Parse version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download DMG and compute SHA256
+        id: sha
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          URL="https://github.com/shabeer-wms/padvibe/releases/download/${GITHUB_REF_NAME}/PadVibe-${VERSION}-Installer.dmg"
+          curl -fL -o padvibe.dmg "$URL"
+          echo "sha256=$(shasum -a 256 padvibe.dmg | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Update tap repository
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA256="${{ steps.sha.outputs.sha256 }}"
+
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+          git clone \
+            https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/shabeer-wms/homebrew-padvibe.git \
+            tap
+
+          sed -i '' \
+            's/version "[^"]*"/version "'"$VERSION"'"/' \
+            tap/Casks/padvibe.rb
+          sed -i '' \
+            's/sha256 "[^"]*"/sha256 "'"$SHA256"'"/' \
+            tap/Casks/padvibe.rb
+
+          cd tap
+          git add Casks/padvibe.rb
+          git commit -m "Update PadVibe to ${VERSION}"
+          git push

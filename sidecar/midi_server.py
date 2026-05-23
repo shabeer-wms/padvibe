@@ -1,4 +1,5 @@
 import asyncio
+import errno as errno_mod
 import json
 import websockets
 import sys
@@ -38,17 +39,18 @@ def watchdog():
 
 async def broadcast(message):
     """Sends a message to all connected WebSocket clients."""
-    if clients:
-        # print(f"Broadcasting: {message[:100]}...") # Debug
-        tasks = [client.send(message) for client in clients]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Cleanup closed clients based on results
-        to_remove = set()
-        for client, result in zip(clients, results):
-            if isinstance(result, (websockets.exceptions.ConnectionClosed, BrokenPipeError)):
-                to_remove.add(client)
-        clients.difference_update(to_remove)
+    if not clients:
+        return
+    # Snapshot the set so concurrent disconnects don't corrupt the zip below.
+    snapshot = list(clients)
+    tasks = [client.send(message) for client in snapshot]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    to_remove = set()
+    for client, result in zip(snapshot, results):
+        if isinstance(result, (websockets.exceptions.ConnectionClosed, BrokenPipeError)):
+            to_remove.add(client)
+    clients.difference_update(to_remove)
 
 async def broadcast_levels():
     """Periodically broadcasts audio levels."""
@@ -266,7 +268,7 @@ async def main():
                 print(f"PORT_BIND_SUCCESS:{port}", flush=True)
                 await asyncio.Future()  # Run forever
         except OSError as e:
-            if e.errno == 48: # Address already in use
+            if e.errno == errno_mod.EADDRINUSE:
                 print(f"Port {port} in use, trying {port + 1}...")
                 port += 1
             else:

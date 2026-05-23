@@ -391,10 +391,8 @@ class SidecarService extends GetxService {
       initStatusText.value = 'WebSocket Connected. Starting engines...';
       debugPrint('WebSocket connected!');
 
-      Future.delayed(const Duration(milliseconds: 500), () {
-        initStatusText.value = 'System Ready.';
-        isInitialized.value = true;
-      });
+      initStatusText.value = 'System Ready.';
+      isInitialized.value = true;
     } catch (e) {
       debugPrint('Error connecting to WebSocket: $e');
       wsConnectionStatus.value = 'Error';

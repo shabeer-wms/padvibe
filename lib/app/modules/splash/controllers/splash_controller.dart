@@ -33,7 +33,6 @@ class SplashController extends GetxController {
       // Step 1: Initialize storage
       initStatus.value = 'Initializing storage...';
       await storage.init();
-      await Future.delayed(const Duration(milliseconds: 200));
 
       // Step 2: Load pad groups
       initStatus.value = 'Loading pad groups...';
@@ -55,7 +54,6 @@ class SplashController extends GetxController {
       initStatus.value = 'Loading faders...';
       final faders = await storage.loadFaders();
       loadedFaders.assignAll(faders);
-      await Future.delayed(const Duration(milliseconds: 200));
 
       // Step 3: Load grid columns preference
       initStatus.value = 'Loading preferences...';
@@ -73,13 +71,11 @@ class SplashController extends GetxController {
           orElse: () => ThemeMode.system,
         ));
       }
-      await Future.delayed(const Duration(milliseconds: 200));
 
       // Step 4: Load saved audio device
       initStatus.value = 'Loading audio device...';
       savedAudioDeviceName = await storage.getSavedAudioDeviceName();
       savedAudioDeviceId = await storage.getSavedAudioDeviceId();
-      await Future.delayed(const Duration(milliseconds: 200));
 
       // Step 5: Wait for sidecar to be ready
       initStatus.value = 'Connecting to audio engine...';
@@ -114,7 +110,7 @@ class SplashController extends GetxController {
     initStatus.value = 'Ready!';
 
     // Small delay to show "Ready!" message
-    Future.delayed(const Duration(milliseconds: 800), () {
+    Future.delayed(const Duration(milliseconds: 200), () {
       // Navigate to home and pass the loaded data
       Get.offAllNamed(
         Routes.home,

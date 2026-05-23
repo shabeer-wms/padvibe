@@ -17,12 +17,13 @@ import 'package:http/http.dart' as http;
 class LocalApiService extends GetxService {
   final StorageService _storage = Get.find<StorageService>();
 
-  // We need lazy access to HomeController to avoid circular dependency during init if possible,
-  // or just find it when needed.
   HomeController? _homeController;
   AudioPlayerService? _audioService;
 
   HttpServer? _server;
+  HttpServer? _wsServer;
+  final Set<WebSocket> _wsClients = {};
+  Timer? _wsTimer;
   Timer? _webhookTimer;
 
   final RxString remoteEndpointUrl = ''.obs;
@@ -35,6 +36,7 @@ class LocalApiService extends GetxService {
     _getHostIp();
     _loadSettings();
     _startServer();
+    _startWsServer();
     _startWebhookTimer();
   }
 
@@ -87,6 +89,7 @@ class LocalApiService extends GetxService {
     router.get('/state', _handleGetState);
     router.get('/levels', _handleGetLevels);
     router.get('/timer', _handleGetTimer);
+    router.get('/overlay/timer', _handleGetTimerOverlay);
     
     // Simple Control Endpoints
     router.get('/play/<index>', _handlePlay);
@@ -123,6 +126,14 @@ class LocalApiService extends GetxService {
   Future<void> _stopServer() async {
     await _server?.close(force: true);
     _server = null;
+    _wsTimer?.cancel();
+    _wsTimer = null;
+    for (final ws in _wsClients) {
+      try { ws.close(); } catch (_) {}
+    }
+    _wsClients.clear();
+    await _wsServer?.close(force: true);
+    _wsServer = null;
   }
 
   Middleware _corsMiddleware() {
@@ -188,6 +199,144 @@ class LocalApiService extends GetxService {
       jsonEncode(json),
       headers: {'Content-Type': 'application/json'},
     );
+  }
+
+  Response _handleGetTimerOverlay(Request request) {
+    const html = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PadVibe Timer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    #timer {
+      font-family: "Courier New", Courier, monospace;
+      font-size: 96px;
+      font-weight: 700;
+      color: #ffffff;
+      letter-spacing: 0.05em;
+      line-height: 1;
+      user-select: none;
+    }
+    #dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ff4444;
+      margin-left: 10px;
+      vertical-align: middle;
+      margin-bottom: 10px;
+      transition: background 0.3s;
+    }
+    #dot.live { background: #44ff88; }
+  </style>
+</head>
+<body>
+  <div>
+    <span id="timer">--:--</span><span id="dot"></span>
+  </div>
+  <script>
+    const p     = new URLSearchParams(location.search);
+    const size  = p.get("size")  || "96";
+    const color = p.get("color") || "ffffff";
+    const bg    = p.get("bg")    || "transparent";
+    const host  = p.get("host")  || location.hostname || "127.0.0.1";
+    const port  = p.get("port")  || "9697";
+
+    const timerEl = document.getElementById("timer");
+    const dotEl   = document.getElementById("dot");
+
+    timerEl.style.fontSize = size + "px";
+    timerEl.style.color    = "#" + color;
+    document.body.style.background = decodeURIComponent(bg);
+
+    let retryMs = 1500;
+
+    function connect() {
+      const ws = new WebSocket("ws://" + host + ":" + port);
+
+      ws.onopen = () => {
+        dotEl.className = "live";
+        retryMs = 1500;
+      };
+
+      ws.onmessage = (e) => {
+        const d = JSON.parse(e.data);
+        timerEl.textContent = d.formatted;
+      };
+
+      ws.onclose = () => {
+        dotEl.className = "";
+        setTimeout(connect, retryMs);
+        retryMs = Math.min(retryMs * 1.5, 15000);
+      };
+
+      ws.onerror = () => ws.close();
+    }
+
+    connect();
+  </script>
+</body>
+</html>''';
+    return Response.ok(html, headers: {'Content-Type': 'text/html; charset=utf-8'});
+  }
+
+  Future<void> _startWsServer() async {
+    try {
+      _wsServer = await HttpServer.bind(InternetAddress.anyIPv4, 9697);
+      debugPrint('Timer WS Server listening on port 9697');
+      _wsServer!.listen((request) async {
+        if (WebSocketTransformer.isUpgradeRequest(request)) {
+          try {
+            final ws = await WebSocketTransformer.upgrade(request);
+            _wsClients.add(ws);
+            ws.done.then((_) => _wsClients.remove(ws));
+          } catch (e) {
+            debugPrint('WS upgrade error: $e');
+          }
+        } else {
+          request.response
+            ..statusCode = HttpStatus.badRequest
+            ..write('WebSocket upgrade required')
+            ..close();
+        }
+      });
+      _wsTimer = Timer.periodic(
+        const Duration(milliseconds: 500),
+        (_) => _pushTimerToWsClients(),
+      );
+    } catch (e) {
+      debugPrint('Failed to start Timer WS Server: $e');
+    }
+  }
+
+  void _pushTimerToWsClients() {
+    if (_wsClients.isEmpty) return;
+    _homeController ??= Get.find<HomeController>();
+    final remaining = _homeController!.remainingSeconds.value;
+    final payload = jsonEncode({
+      'remaining_seconds': remaining,
+      'formatted': Formatters.formatRemaining(remaining),
+    });
+    final dead = <WebSocket>{};
+    for (final ws in _wsClients) {
+      try {
+        ws.add(payload);
+      } catch (_) {
+        dead.add(ws);
+      }
+    }
+    _wsClients.removeAll(dead);
   }
 
   Future<Response> _handlePlay(Request request, String indexStr) async {

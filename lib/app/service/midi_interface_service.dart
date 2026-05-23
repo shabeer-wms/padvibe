@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:get/get.dart';
 import 'sidecar_service.dart';
 
-enum MidiEventType { noteOn, noteOff, controlChange }
+enum MidiEventType { noteOn, noteOff, controlChange, programChange }
 
 class MidiNoteEvent {
   final int? note;
@@ -26,6 +26,8 @@ class MidiNoteEvent {
   int get triggerId {
     if (type == MidiEventType.controlChange) {
       return 30000 + (channel * 200) + (control ?? 0);
+    } else if (type == MidiEventType.programChange) {
+      return 50000 + (channel * 200) + (note ?? 0);
     } else {
       return 10000 + (channel * 200) + (note ?? 0);
     }
@@ -35,13 +37,20 @@ class MidiNoteEvent {
     final ch = channel + 1;
     if (type == MidiEventType.controlChange) {
       return 'CC $control (Ch $ch)';
+    } else if (type == MidiEventType.programChange) {
+      return 'PC $note (Ch $ch)';
     } else {
       return 'Note $note (Ch $ch)';
     }
   }
 
   static String getDisplayNameForId(int id) {
-    if (id >= 30000) {
+    if (id >= 50000) {
+      final rem = id - 50000;
+      final ch = (rem ~/ 200) + 1;
+      final pc = rem % 200;
+      return 'PC $pc (Ch $ch)';
+    } else if (id >= 30000) {
       final rem = id - 30000;
       final ch = (rem ~/ 200) + 1;
       final cc = rem % 200;
@@ -138,6 +147,8 @@ class MidiInterfaceService extends GetxService {
     final int? value = msg['value'];
     final int velocity = msg['velocity'] ?? (value ?? 0);
 
+    final int? program = msg['program'];
+
     if (msgType == 'note_on' && velocity > 0) {
       _noteStreamController.add(
         MidiNoteEvent(
@@ -165,6 +176,15 @@ class MidiInterfaceService extends GetxService {
           velocity: value ?? 0,
           channel: channel,
           type: MidiEventType.controlChange,
+        ),
+      );
+    } else if (msgType == 'program_change') {
+      _noteStreamController.add(
+        MidiNoteEvent(
+          note: program,
+          velocity: 127,
+          channel: channel,
+          type: MidiEventType.programChange,
         ),
       );
     }

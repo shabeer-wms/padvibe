@@ -368,6 +368,7 @@ class AudioEngine:
         )
 
     def _cleanup_stream_locked(self, stream_id, stream_obj):
+        ctx = stream_obj.get("ctx", {})
         try:
             stream_obj["stream"].stop()
         except Exception:
@@ -377,9 +378,18 @@ class AudioEngine:
         except Exception:
             pass
         try:
-            stream_obj["ctx"]["file"].close()
+            ctx["file"].close()
         except Exception:
             pass
+
+        # Fire on_finished if the stream was pruned before the callback could do it.
+        # This ensures Flutter always receives audio_finished and clears the active stream.
+        if not ctx.get("on_finished_called", True) and ctx.get("on_finished"):
+            ctx["on_finished_called"] = True
+            try:
+                ctx["on_finished"](stream_id)
+            except Exception as e:
+                print(f"on_finished error during cleanup: {e}")
 
         self.stream_levels.pop(stream_id, None)
         self.streams.pop(stream_id, None)

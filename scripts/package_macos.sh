@@ -65,7 +65,11 @@ fi
 # Cleanup staging
 rm -rf "$STAGING_DIR"
 
+SHA256=$(shasum -a 256 "$OUTPUT_DIR/$DMG_NAME" | awk '{print $1}')
 echo "--------------------------------------------------"
 echo "✅ SUCCESS! Installer created at:"
 echo "$OUTPUT_DIR/$DMG_NAME"
+echo ""
+echo "SHA256: $SHA256"
+echo "(Update tap/Casks/padvibe.rb with this value if releasing manually)"
 echo "--------------------------------------------------"

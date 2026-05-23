@@ -33,7 +33,7 @@ class MidiEngine:
         while self.running:
             if self.current_input_port:
                 for msg in self.current_input_port.iter_pending():
-                    if msg.type in ['note_on', 'note_off', 'control_change', 'polytouch', 'aftertouch', 'pitchwheel']:
+                    if msg.type in ['note_on', 'note_off', 'control_change', 'program_change', 'polytouch', 'aftertouch', 'pitchwheel']:
                         data = {
                             "type": "midi_message",
                             "message": {
@@ -41,13 +41,15 @@ class MidiEngine:
                                 "channel": msg.channel,
                             }
                         }
-                        
+
                         if msg.type in ['note_on', 'note_off']:
                             data["message"]["note"] = msg.note
                             data["message"]["velocity"] = msg.velocity
                         elif msg.type == 'control_change':
                             data["message"]["control"] = msg.control
                             data["message"]["value"] = msg.value
+                        elif msg.type == 'program_change':
+                            data["message"]["program"] = msg.program
                         elif msg.type == 'polytouch':
                             data["message"]["note"] = msg.note
                             data["message"]["value"] = msg.value

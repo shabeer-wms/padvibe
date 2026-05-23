@@ -43,8 +43,6 @@ class HomeController extends GetxController {
   final pads = <Pad>[for (int i = 1; i <= 20; i++) Pad(name: 'Pad $i')].obs;
 
   final remainingSeconds = 0.0.obs;
-  final heartbeat =
-      0.obs; // Added to trigger UI updates even for background pads
   final masterVolume = 1.0.obs; // Master volume control (0.0 to 1.0)
   Timer? _ticker;
 
@@ -161,17 +159,16 @@ class HomeController extends GetxController {
       }
     }
 
-    _ticker = Timer.periodic(const Duration(milliseconds: 16), (_) async {
-      heartbeat.value++;
-      final v = audioService.getRemainingTime();
-      remainingSeconds.value = v;
+    _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      remainingSeconds.value = audioService.getRemainingTime();
     });
 
     // Listen to MIDI events
     midiService.noteStream.listen((event) {
       if (editingPadIndex.value != -1) return; // Ignore MIDI if editing name
 
-      if (event.type == MidiEventType.noteOn) {
+      if (event.type == MidiEventType.noteOn ||
+          event.type == MidiEventType.programChange) {
         final index = pads.indexWhere((p) => p.midiNote == event.triggerId);
         if (index != -1) playPad(index);
       } else if (event.type == MidiEventType.controlChange) {
