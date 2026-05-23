@@ -114,6 +114,7 @@ padvibe/
 | **MIDI** | mido, python-rtmidi |
 | **Storage** | SQLite (sqflite_common_ffi), Persistence |
 
+
 ---
 
 ## 🤝 Contributing
