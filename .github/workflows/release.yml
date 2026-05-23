@@ -56,6 +56,20 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      - name: Convert icon to icns
+        run: |
+          mkdir -p /tmp/padvibe.iconset
+          sips -z 16 16   assets/logo/512-mac.png --out /tmp/padvibe.iconset/icon_16x16.png
+          sips -z 32 32   assets/logo/512-mac.png --out /tmp/padvibe.iconset/icon_16x16@2x.png
+          sips -z 32 32   assets/logo/512-mac.png --out /tmp/padvibe.iconset/icon_32x32.png
+          sips -z 64 64   assets/logo/512-mac.png --out /tmp/padvibe.iconset/icon_32x32@2x.png
+          sips -z 128 128 assets/logo/512-mac.png --out /tmp/padvibe.iconset/icon_128x128.png
+          sips -z 256 256 assets/logo/512-mac.png --out /tmp/padvibe.iconset/icon_128x128@2x.png
+          sips -z 256 256 assets/logo/512-mac.png --out /tmp/padvibe.iconset/icon_256x256.png
+          sips -z 512 512 assets/logo/512-mac.png --out /tmp/padvibe.iconset/icon_256x256@2x.png
+          cp assets/logo/512-mac.png /tmp/padvibe.iconset/icon_512x512.png
+          iconutil -c icns /tmp/padvibe.iconset -o /tmp/padvibe.icns
+
       - name: Create DMG
         id: dmg
         run: |
@@ -67,24 +81,28 @@ jobs:
           STAGING="build/macos/staging"
           mkdir -p "$STAGING"
           cp -r "$APP_PATH" "$STAGING/"
-
           mkdir -p build/macos/installer
-          create-dmg \
-            --volname "PadVibe Installer" \
-            --volicon "assets/logo/512-mac.png" \
-            --window-pos 200 120 \
-            --window-size 600 400 \
-            --icon-size 100 \
-            --icon "$APP_NAME" 150 190 \
-            --hide-extension "$APP_NAME" \
-            --app-drop-link 450 185 \
-            "build/macos/installer/$DMG_NAME" \
-            "$STAGING" \
-          || hdiutil create \
-            -volname "PadVibe" \
-            -srcfolder "$STAGING" \
-            -ov -format UDZO \
-            "build/macos/installer/$DMG_NAME"
+
+          if create-dmg \
+              --volname "PadVibe Installer" \
+              --volicon /tmp/padvibe.icns \
+              --window-pos 200 120 \
+              --window-size 600 400 \
+              --icon-size 100 \
+              --icon "$APP_NAME" 150 190 \
+              --hide-extension "$APP_NAME" \
+              --app-drop-link 450 185 \
+              "build/macos/installer/$DMG_NAME" \
+              "$STAGING"; then
+            echo "create-dmg succeeded"
+          else
+            echo "create-dmg failed, falling back to hdiutil"
+            hdiutil create \
+              -volname "PadVibe" \
+              -srcfolder "$STAGING" \
+              -ov -format UDZO \
+              "build/macos/installer/$DMG_NAME"
+          fi
 
           rm -rf "$STAGING"
           echo "dmg_path=build/macos/installer/$DMG_NAME" >> "$GITHUB_OUTPUT"
