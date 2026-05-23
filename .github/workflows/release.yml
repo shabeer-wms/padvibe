@@ -9,30 +9,29 @@ permissions:
   contents: write
 
 jobs:
-  build-macos:
-    runs-on: macos-latest
-
+  # Build the sidecar binary for each architecture separately
+  build-sidecar:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-13
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: sidecar/requirements.txt
 
-      - name: Install sidecar dependencies
+      - name: Install dependencies
         run: pip install pyinstaller -r sidecar/requirements.txt
 
-      - name: Build sidecar binary
+      - name: Build sidecar (${{ matrix.arch }})
         run: |
           rm -rf sidecar/dist
           python -m PyInstaller \
@@ -41,7 +40,48 @@ jobs:
             --name midi_server \
             --hidden-import='mido.backends.rtmidi' \
             sidecar/midi_server.py
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-${{ matrix.arch }}
+          path: sidecar/dist/midi_server
+          retention-days: 1
+
+  build-app:
+    needs: build-sidecar
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Download arm64 sidecar
+        uses: actions/download-artifact@v4
+        with:
+          name: sidecar-arm64
+          path: /tmp/sidecar-arm64
+
+      - name: Download x86_64 sidecar
+        uses: actions/download-artifact@v4
+        with:
+          name: sidecar-x86_64
+          path: /tmp/sidecar-x86_64
+
+      - name: Combine into universal binary
+        run: |
+          mkdir -p sidecar/dist
+          lipo -create \
+            /tmp/sidecar-arm64/midi_server \
+            /tmp/sidecar-x86_64/midi_server \
+            -output sidecar/dist/midi_server
+          chmod +x sidecar/dist/midi_server
           codesign --force --deep --sign - sidecar/dist/midi_server
+          lipo -info sidecar/dist/midi_server
 
       - name: Install Flutter dependencies
         run: flutter pub get
