@@ -38,15 +38,15 @@ jobs:
             sidecar/midi_server.py
 
       # ── x86_64 sidecar (Rosetta 2 on the same runner) ─────────────────────
-      - name: Install x86_64 Homebrew + Python via Rosetta
+      - name: Install x86_64 Homebrew via Rosetta
         run: |
           softwareupdate --install-rosetta --agree-to-license 2>/dev/null || true
           NONINTERACTIVE=1 arch -x86_64 /bin/bash -c \
             "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          arch -x86_64 /usr/local/bin/brew install --quiet python@3.12
 
       - name: Build sidecar (x86_64 via Rosetta)
         run: |
+          # Python.org x86_64 framework already at /usr/local/bin — no brew install needed
           arch -x86_64 /usr/local/bin/pip3.12 install --prefer-binary pyinstaller -r sidecar/requirements.txt
           arch -x86_64 /usr/local/bin/python3.12 -m PyInstaller \
             --onefile \
