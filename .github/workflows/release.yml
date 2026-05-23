@@ -29,8 +29,9 @@ jobs:
 
       - name: Build sidecar (arm64)
         run: |
-          pip install --prefer-binary pyinstaller -r sidecar/requirements.txt
-          python -m PyInstaller \
+          python3 -m venv /tmp/venv-arm64
+          /tmp/venv-arm64/bin/pip install --prefer-binary pyinstaller -r sidecar/requirements.txt
+          /tmp/venv-arm64/bin/python -m PyInstaller \
             --onefile \
             --distpath /tmp/sidecar-arm64 \
             --name midi_server \
@@ -46,9 +47,13 @@ jobs:
 
       - name: Build sidecar (x86_64 via Rosetta)
         run: |
-          # Python.org x86_64 framework already at /usr/local/bin — no brew install needed
-          arch -x86_64 /usr/local/bin/pip3.12 install --prefer-binary pyinstaller -r sidecar/requirements.txt
-          arch -x86_64 /usr/local/bin/python3.12 -m PyInstaller \
+          # Install x86_64 Python via Homebrew keg; symlink may fail (Python.org conflict) but keg is usable
+          arch -x86_64 /usr/local/bin/brew install --quiet python@3.12 2>&1 || true
+          X86_PY="$(arch -x86_64 /usr/local/bin/brew --prefix python@3.12)/bin/python3.12"
+          echo "x86_64 Python: $X86_PY"
+          arch -x86_64 "$X86_PY" --version
+          arch -x86_64 "$X86_PY" -m pip install --prefer-binary pyinstaller -r sidecar/requirements.txt
+          arch -x86_64 "$X86_PY" -m PyInstaller \
             --onefile \
             --distpath /tmp/sidecar-x86_64 \
             --name midi_server \
