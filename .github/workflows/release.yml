@@ -9,48 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  # Build the sidecar binary for each architecture separately
-  build-sidecar:
-    strategy:
-      matrix:
-        include:
-          - runner: macos-latest
-            arch: arm64
-          - runner: macos-13
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: sidecar/requirements.txt
-
-      - name: Install dependencies
-        run: pip install pyinstaller -r sidecar/requirements.txt
-
-      - name: Build sidecar (${{ matrix.arch }})
-        run: |
-          rm -rf sidecar/dist
-          python -m PyInstaller \
-            --onefile \
-            --distpath sidecar/dist \
-            --name midi_server \
-            --hidden-import='mido.backends.rtmidi' \
-            sidecar/midi_server.py
-
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: sidecar-${{ matrix.arch }}
-          path: sidecar/dist/midi_server
-          retention-days: 1
-
-  build-app:
-    needs: build-sidecar
-    runs-on: macos-latest
+  build-macos:
+    runs-on: macos-latest  # Apple Silicon — fast runner
 
     steps:
       - uses: actions/checkout@v4
@@ -60,19 +20,43 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Download arm64 sidecar
-        uses: actions/download-artifact@v4
+      # ── arm64 sidecar (native) ─────────────────────────────────────────────
+      - uses: actions/setup-python@v5
         with:
-          name: sidecar-arm64
-          path: /tmp/sidecar-arm64
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: sidecar/requirements.txt
 
-      - name: Download x86_64 sidecar
-        uses: actions/download-artifact@v4
-        with:
-          name: sidecar-x86_64
-          path: /tmp/sidecar-x86_64
+      - name: Build sidecar (arm64)
+        run: |
+          pip install --prefer-binary pyinstaller -r sidecar/requirements.txt
+          python -m PyInstaller \
+            --onefile \
+            --distpath /tmp/sidecar-arm64 \
+            --name midi_server \
+            --hidden-import='mido.backends.rtmidi' \
+            sidecar/midi_server.py
 
-      - name: Combine into universal binary
+      # ── x86_64 sidecar (Rosetta 2 on the same runner) ─────────────────────
+      - name: Install x86_64 Homebrew + Python via Rosetta
+        run: |
+          softwareupdate --install-rosetta --agree-to-license 2>/dev/null || true
+          NONINTERACTIVE=1 arch -x86_64 /bin/bash -c \
+            "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          arch -x86_64 /usr/local/bin/brew install --quiet python@3.12
+
+      - name: Build sidecar (x86_64 via Rosetta)
+        run: |
+          arch -x86_64 /usr/local/bin/pip3.12 install --prefer-binary pyinstaller -r sidecar/requirements.txt
+          arch -x86_64 /usr/local/bin/python3.12 -m PyInstaller \
+            --onefile \
+            --distpath /tmp/sidecar-x86_64 \
+            --name midi_server \
+            --hidden-import='mido.backends.rtmidi' \
+            sidecar/midi_server.py
+
+      # ── Universal binary ───────────────────────────────────────────────────
+      - name: Create universal binary
         run: |
           mkdir -p sidecar/dist
           lipo -create \
@@ -81,8 +65,9 @@ jobs:
             -output sidecar/dist/midi_server
           chmod +x sidecar/dist/midi_server
           codesign --force --deep --sign - sidecar/dist/midi_server
-          lipo -info sidecar/dist/midi_server
+          echo "Architectures: $(lipo -archs sidecar/dist/midi_server)"
 
+      # ── Flutter + DMG + Release ────────────────────────────────────────────
       - name: Install Flutter dependencies
         run: flutter pub get
 
@@ -121,7 +106,6 @@ jobs:
               "$STAGING"; then
             echo "create-dmg succeeded"
           else
-            echo "create-dmg failed, falling back to hdiutil"
             hdiutil create \
               -volname "PadVibe" \
               -srcfolder "$STAGING" \
