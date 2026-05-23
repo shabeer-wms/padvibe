@@ -1,6 +1,6 @@
 cask "padvibe" do
-  version "1.8.0"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  version "1.9.0"
+  sha256 "109b427fe4a65bcef561683354d355240f087909762c2718facf4acecc23197d"
 
   url "https://github.com/shabeer-wms/padvibe/releases/download/v#{version}/PadVibe-#{version}-Installer.dmg"
   name "PadVibe"
