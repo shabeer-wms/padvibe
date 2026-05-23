@@ -49,18 +49,8 @@ else
     # Remove existing DMG if it exists
     rm -f "$OUTPUT_DIR/$DMG_NAME"
     
-    # create-dmg requires .icns — convert on the fly
-    ICON_DIR=$(mktemp -d)
-    sips -z 512 512 "assets/logo/512-mac.png" --out "$ICON_DIR/icon.png" > /dev/null
-    mkdir "$ICON_DIR/padvibe.iconset"
-    for SIZE in 16 32 128 256 512; do
-      sips -z $SIZE $SIZE "$ICON_DIR/icon.png" --out "$ICON_DIR/padvibe.iconset/icon_${SIZE}x${SIZE}.png" > /dev/null
-    done
-    iconutil -c icns "$ICON_DIR/padvibe.iconset" -o "$ICON_DIR/padvibe.icns"
-
     create-dmg \
       --volname "PadVibe Installer" \
-      --volicon "$ICON_DIR/padvibe.icns" \
       --window-pos 200 120 \
       --window-size 600 400 \
       --icon-size 100 \
