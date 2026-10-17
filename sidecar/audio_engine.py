@@ -1,47 +1,171 @@
+import logging
+import os
+import threading
+import time
+from collections import OrderedDict, namedtuple
+
+import numpy as np
 import sounddevice as sd
 import soundfile as sf
-import numpy as np
-import threading
-import os
+
+log = logging.getLogger("sidecar.audio")
+
+DecodedAudio = namedtuple("DecodedAudio", "data samplerate channels frames nbytes mtime size")
+
+
+class AudioCache:
+    """Decoded audio kept in memory.
+
+    A file is decoded once, then every play and its waveform reuse that array,
+    so a pad starts instantly instead of re-decoding (mp3 decoding is the slow
+    part). Entries are dropped least-recently-used once the budget is exceeded,
+    when the file changes on disk, or explicitly via evict(). Files too large
+    to hold in memory are not cached; playback streams them from disk.
+    """
+
+    def __init__(self, budget_bytes=600 * 1024 * 1024, max_file_bytes=100 * 1024 * 1024):
+        self.budget_bytes = budget_bytes
+        self.max_file_bytes = max_file_bytes
+        self._entries = OrderedDict()  # path -> DecodedAudio, least recently used first
+        self._total = 0
+        self._lock = threading.Lock()
+        self._path_locks = {}  # one decode per file at a time; different files decode in parallel
+
+    @property
+    def total_bytes(self):
+        return self._total
+
+    def __len__(self):
+        return len(self._entries)
+
+    def load(self, path):
+        """Returns the DecodedAudio for path, decoding it if needed, or None if
+        the file is too large to cache. Raises if the file cannot be read."""
+        st = os.stat(path)
+        with self._lock:
+            path_lock = self._path_locks.setdefault(path, threading.Lock())
+        with path_lock:
+            with self._lock:
+                entry = self._entries.get(path)
+                if entry and entry.mtime == st.st_mtime_ns and entry.size == st.st_size:
+                    self._entries.move_to_end(path)
+                    log.debug("Cache hit: %s", os.path.basename(path))
+                    return entry
+
+            info = sf.info(path)
+            if info.frames * info.channels * 4 > self.max_file_bytes:
+                log.info("Not caching %s: %.0fMB decoded exceeds the %.0fMB per-file limit",
+                         os.path.basename(path), info.frames * info.channels * 4 / 1e6, self.max_file_bytes / 1e6)
+                return None
+
+            t0 = time.monotonic()
+            data, samplerate = sf.read(path, dtype="float32", always_2d=True)
+            entry = DecodedAudio(data, samplerate, data.shape[1], len(data), data.nbytes, st.st_mtime_ns, st.st_size)
+            log.info("Decoded %s: %d frames, %d ch, %d Hz, %.1fMB in %.0fms",
+                     os.path.basename(path), entry.frames, entry.channels, samplerate,
+                     entry.nbytes / 1e6, (time.monotonic() - t0) * 1000)
+
+            with self._lock:
+                old = self._entries.pop(path, None)
+                if old:
+                    self._total -= old.nbytes
+                self._entries[path] = entry
+                self._total += entry.nbytes
+                while self._total > self.budget_bytes and len(self._entries) > 1:
+                    victim, dropped = self._entries.popitem(last=False)
+                    self._total -= dropped.nbytes
+                    log.info("Cache full: evicted %s (%.1fMB)", os.path.basename(victim), dropped.nbytes / 1e6)
+            return entry
+
+    def evict(self, path):
+        with self._lock:
+            entry = self._entries.pop(path, None)
+            self._path_locks.pop(path, None)
+            if entry:
+                self._total -= entry.nbytes
+        if entry:
+            log.info("Evicted %s from cache (%.1fMB freed)", os.path.basename(path), entry.nbytes / 1e6)
+        return entry is not None
+
+
+class _Stream:
+    """State of one playing sound, shared between the audio callback and commands."""
+
+    def __init__(self, path, audio, file, volume, loop, on_finished, output_channels, filter_type, filter_freq):
+        self.path = path
+        self.data = audio.data if audio else None  # decoded samples (shared, never modified)
+        self.file = file                           # SoundFile when streaming from disk
+        self.samplerate = audio.samplerate if audio else file.samplerate
+        self.channels = audio.channels if audio else file.channels
+        self.frames = audio.frames if audio else file.frames
+        self.cursor = 0
+        self.volume = volume
+        self.loop = loop
+        self.finished = False
+        self.closed = False
+        self.on_finished = on_finished
+        self.on_finished_called = False
+        self.output_channels = output_channels
+        self.filter_type = filter_type
+        self.filter_freq = filter_freq
+        self.fade_total = int(0.01 * self.samplerate)  # 10ms fade-in avoids a click
+        self.fade_remaining = self.fade_total
+        self.underflows = 0
+        self.last_status_log = 0.0
+        self.stream = None
+
+    def notify_finished(self, stream_id):
+        if not self.on_finished_called and self.on_finished:
+            self.on_finished_called = True
+            self.on_finished(stream_id)
+
 
 class AudioEngine:
     def __init__(self):
-        self.streams = {}
+        self.streams = {}  # stream_id -> _Stream
         self.next_stream_id = 0
         self.lock = threading.RLock()
         self.master_volume = 1.0
-        # Stores current RMS/Peak per stream: { stream_id: (rms_l, rms_r, peak_l, peak_r) }
+        # Current RMS/Peak per stream: { stream_id: (rms_l, rms_r, peak_l, peak_r) }
         self.stream_levels = {}
-        self.last_mix = np.zeros((1024, 2))
-        self.mix_lock = threading.Lock()
         self._initialized = False
         self.device_cache = {}
-        self.waveform_cache = {}
-        self.waveform_cache_limit = 256
+        self.cache = AudioCache()
+        # PortAudio must not be re-initialised while another thread opens a stream
+        # or queries devices (that can crash natively), so those are serialised.
+        self._pa_lock = threading.RLock()
+        # Set by the server; called (from any thread) when device indices changed.
+        self.on_devices_changed = None
+
+    # ── Devices ────────────────────────────────────────────────────────────
 
     def _ensure_initialized(self):
+        with self._pa_lock:
+            self._ensure_initialized_locked()
+
+    def _ensure_initialized_locked(self):
         if not self._initialized:
             try:
                 sd._terminate()
                 sd._initialize()
                 self._initialized = True
-                print("DEBUG ENGINE: PortAudio Initialized", flush=True)
-            except Exception as e:
-                print(f"DEBUG ENGINE ERROR: Initialization failed: {e}", flush=True)
+                log.info("PortAudio initialized: %s", sd.get_portaudio_version()[1])
+            except Exception:
+                log.exception("PortAudio initialization failed")
 
     def list_devices(self):
         """Returns a list of available output devices."""
         self._ensure_initialized()
         try:
-            devices = sd.query_devices()
-            hostapis = sd.query_hostapis()
+            with self._pa_lock:
+                devices = sd.query_devices()
+                hostapis = sd.query_hostapis()
             output_devices = []
             new_cache = {}
             for i, dev in enumerate(devices):
                 if dev['max_output_channels'] > 0:
                     api_index = dev['hostapi']
                     api_name = hostapis[api_index]['name'] if api_index < len(hostapis) else str(api_index)
-                    
                     dev_info = {
                         "id": i,
                         "name": dev['name'],
@@ -50,455 +174,437 @@ class AudioEngine:
                     }
                     output_devices.append(dev_info)
                     new_cache[i] = dev_info
-            
+
             with self.lock:
                 self.device_cache = new_cache
-                
+
+            log.info(
+                "Audio output devices: %s | default output=%s",
+                [f"{d['id']}:{d['name']}" for d in output_devices],
+                sd.default.device[1],
+            )
             return output_devices
-        except Exception as e:
-            print(f"Error listing devices: {e}")
+        except Exception:
+            log.exception("Listing audio devices failed")
             return []
+
+    def _output_channels_for(self, device_id):
+        """Returns (device_id, channel count) for a device, resolving the default."""
+        with self.lock:
+            if device_id is not None and device_id in self.device_cache:
+                return device_id, self.device_cache[device_id]['channels']
+            try:
+                target = device_id if device_id is not None else sd.default.device[1]
+                if target in self.device_cache:
+                    return target, self.device_cache[target]['channels']
+                channels = sd.query_devices(target, 'output')['max_output_channels']
+                self.device_cache[target] = {"channels": channels}
+                return target, channels
+            except Exception:
+                return device_id, 2
+
+    # ── Playback ───────────────────────────────────────────────────────────
 
     def play(self, file_path, device_id=None, volume=1.0, loop=False, on_finished=None, output_channels=None, filter_type='none', filter_freq=20000):
         """Plays an audio file on a specific device."""
         self._ensure_initialized()
-        
-        # Use cached device info if available
-        max_ch = 2
-        with self.lock:
-            if device_id is not None and device_id in self.device_cache:
-                max_ch = self.device_cache[device_id]['channels']
-            else:
-                try:
-                    target = device_id if device_id is not None else sd.default.device[1]
-                    if target in self.device_cache:
-                        max_ch = self.device_cache[target]['channels']
-                    else:
-                        info = sd.query_devices(target, 'output')
-                        max_ch = info['max_output_channels']
-                        self.device_cache[target] = {"channels": max_ch}
-                    if device_id is None:
-                        device_id = target
-                except:
-                    max_ch = 2
+        device_id, max_ch = self._output_channels_for(device_id)
 
-        print(f"DEBUG ENGINE: Attempting to play {file_path} on device {device_id}", flush=True)
+        log.info(
+            "Play request: file=%s device=%s volume=%s loop=%s channels=%s filter=%s",
+            file_path, device_id, volume, loop, output_channels, filter_type,
+        )
         try:
             if not os.path.exists(file_path):
-                print(f"DEBUG ENGINE ERROR: File does not exist: {file_path}", flush=True)
+                log.error("File does not exist: %s", file_path)
                 raise FileNotFoundError(f"File not found: {file_path}")
 
-            # Load file
-            f = sf.SoundFile(file_path)
-            print(f"DEBUG ENGINE: File opened. SR={f.samplerate}, CH={f.channels}", flush=True)
-            
-            # Optimization: Read entire file into memory if < 20MB
-            # 20MB is roughly 2 minutes of stereo 44.1kHz 16-bit audio
-            is_preloaded = False
-            audio_data = None
-            if f.seekable and f.frames * f.channels * 4 < 20 * 1024 * 1024:
-                audio_data = f.read(dtype='float32')
-                is_preloaded = True
-            else:
-                f.seek(0)
+            audio = self.cache.load(file_path)  # instant when already decoded
+            file = None
+            if audio is None:  # too large to hold in memory: stream from disk
+                file = sf.SoundFile(file_path)
+                log.info("Streaming %s from disk: %d Hz, %d ch, %d frames",
+                         os.path.basename(file_path), file.samplerate, file.channels, file.frames)
 
-            stream_id = self.next_stream_id
-            self.next_stream_id += 1
-
-            # Callback context
-            ctx = {
-                "file": f,
-                "data": audio_data,
-                "is_preloaded": is_preloaded,
-                "cursor": 0,
-                "volume": volume,
-                "loop": loop,
-                "finished": False,
-                "on_finished_called": False,
-                "on_finished": on_finished,
-                "output_channels": output_channels,
-                "filter_type": filter_type,
-                "filter_freq": filter_freq,
-                "filter_state": None, # Will store [last_y_L, last_y_R]
-                "first_frame": True,
-                "fade_in_remaining": int(0.01 * f.samplerate), # 10ms fade-in
-                "fade_in_total": int(0.01 * f.samplerate)
-            }
-
-            def callback(outdata, frames, time, status):
-                if ctx["first_frame"]:
-                    # print("DEBUG ENGINE: Audio callback is alive and running", flush=True)
-                    ctx["first_frame"] = False
-                
-                if status:
-                    print(f"Audio status: {status}")
-                
-                if ctx["finished"]:
-                    outdata.fill(0)
-                    if not ctx["on_finished_called"] and ctx["on_finished"]:
-                        ctx["on_finished_called"] = True
-                        ctx["on_finished"](stream_id)
-                    raise sd.CallbackStop
-
-                # Initialize data_chunk as empty with correct shape
-                channels_in = ctx["data"].shape[1] if ctx["is_preloaded"] and len(ctx["data"].shape) > 1 else (ctx["file"].channels if not ctx["is_preloaded"] else 1)
-                data_chunk = np.zeros((0, channels_in), dtype='float32') if channels_in > 1 else np.zeros((0,), dtype='float32')
-                
-                while len(data_chunk) < frames:
-                    needed = frames - len(data_chunk)
-                    
-                    if ctx["is_preloaded"]:
-                        # Read from memory
-                        available = len(ctx["data"]) - ctx["cursor"]
-                        if available > 0:
-                            take = min(available, needed)
-                            chunk = ctx["data"][ctx["cursor"]:ctx["cursor"]+take]
-                            if len(data_chunk) == 0:
-                                data_chunk = chunk
-                            else:
-                                data_chunk = np.concatenate((data_chunk, chunk))
-                            ctx["cursor"] += take
-                        
-                        if len(data_chunk) < frames:
-                            if ctx["loop"]:
-                                ctx["cursor"] = 0
-                            else:
-                                ctx["finished"] = True
-                                break 
-                    else:
-                        # Read from disk
-                        chunk = ctx["file"].read(needed, dtype='float32')
-                        if len(chunk) > 0:
-                            if len(data_chunk) == 0:
-                                data_chunk = chunk
-                            else:
-                                if len(data_chunk.shape) == 1 and len(chunk.shape) == 1:
-                                    data_chunk = np.concatenate((data_chunk, chunk))
-                                else:
-                                    if len(data_chunk.shape) == 1:
-                                        data_chunk = data_chunk.reshape(-1, 1)
-                                    if len(chunk.shape) == 1:
-                                        chunk = chunk.reshape(-1, 1)
-                                    data_chunk = np.vstack((data_chunk, chunk))
-                        
-                        if len(data_chunk) < frames:
-                            if ctx["loop"]:
-                                ctx["file"].seek(0)
-                            else:
-                                ctx["finished"] = True
-                                break
-                
-                # Apply volume
-                if len(data_chunk) > 0:
-                    data_chunk *= (ctx["volume"] * self.master_volume)
-
-                    # --- Fade In to prevent clicks ---
-                    if ctx["fade_in_remaining"] > 0:
-                        fade_len = min(len(data_chunk), ctx["fade_in_remaining"])
-                        # Linear ramp from current position to 1.0
-                        start_f = 1.0 - (ctx["fade_in_remaining"] / ctx["fade_in_total"])
-                        end_f = 1.0 - ((ctx["fade_in_remaining"] - fade_len) / ctx["fade_in_total"])
-                        ramp = np.linspace(start_f, end_f, fade_len, dtype='float32')
-                        
-                        if len(data_chunk.shape) > 1:
-                            for c in range(data_chunk.shape[1]):
-                                data_chunk[:fade_len, c] *= ramp
-                        else:
-                            data_chunk[:fade_len] *= ramp
-                        
-                        ctx["fade_in_remaining"] -= fade_len
-
-                # Assign to outdata with channel handling
-                outdata.fill(0) 
-
-                if len(data_chunk) > 0:
-                    write_len = len(data_chunk)
-                    if write_len > len(outdata):
-                         write_len = len(outdata)
-                         data_chunk = data_chunk[:write_len]
-
-                    curr_channels_in = 1 if len(data_chunk.shape) == 1 else data_chunk.shape[1]
-                    
-                    targets = ctx["output_channels"]
-                    if targets is None:
-                        channels_out = outdata.shape[1]
-                        if curr_channels_in == 1 and channels_out >= 2:
-                             outdata[:write_len, 0] = data_chunk.flatten()
-                             outdata[:write_len, 1] = data_chunk.flatten()
-                        elif curr_channels_in == channels_out:
-                             outdata[:write_len] = data_chunk
-                        else:
-                             min_ch = min(curr_channels_in, channels_out)
-                             if len(data_chunk.shape) == 1:
-                                  outdata[:write_len, 0] = data_chunk
-                             else:
-                                  outdata[:write_len, :min_ch] = data_chunk[:, :min_ch]
-                    else:
-                        if len(data_chunk.shape) == 1:
-                            data_chunk = data_chunk.reshape(-1, 1)
-                        
-                        curr_channels_in = data_chunk.shape[1]
-                        for i, target_ch in enumerate(targets):
-                            if target_ch < outdata.shape[1]:
-                                source_ch = i % curr_channels_in
-                                outdata[:write_len, target_ch] = data_chunk[:, source_ch]
-
-                    # --- Master Soft Limiter ---
-                    # Prevents harsh digital clipping by squashing peaks near 1.0
-                    # Using tanh for a soft-knee limit
-                    np.tanh(outdata[:write_len], out=outdata[:write_len]) 
-                    
-                    # --- Metering Calculation (Post-Routing, Post-Limiting) ---
-                    # Calculate RMS and Peak for hardware channels 0 and 1
-                    # This ensures the meter matches what the user actually hears on L/R
-                    meter_data = outdata[:write_len]
-                    peaks = np.max(np.abs(meter_data), axis=0)
-                    rms_vals = np.sqrt(np.mean(meter_data**2, axis=0))
-
-                    pl = float(peaks[0]) if len(peaks) > 0 else 0.0
-                    pr = float(peaks[1]) if len(peaks) > 1 else 0.0
-                    rl = float(rms_vals[0]) if len(rms_vals) > 0 else 0.0
-                    rr = float(rms_vals[1]) if len(rms_vals) > 1 else 0.0
-                    
-                    self.stream_levels[stream_id] = (rl, rr, pl, pr)
-
-                    # Store a copy of the final mixed outdata for spectrum analysis
-                    if write_len == 1024:
-                        with self.mix_lock:
-                            self.last_mix = outdata.copy()
-
-                    if write_len < len(outdata) and ctx["finished"]:
-                        if not ctx["on_finished_called"] and ctx["on_finished"]:
-                            ctx["on_finished_called"] = True
-                            ctx["on_finished"](stream_id)
-                        raise sd.CallbackStop
-                else:
-                    self.stream_levels[stream_id] = (0.0, 0.0, 0.0, 0.0)
-                    if ctx["finished"]:
-                        if not ctx["on_finished_called"] and ctx["on_finished"]:
-                            ctx["on_finished_called"] = True
-                            ctx["on_finished"](stream_id)
-                        raise sd.CallbackStop
-
-            try:
-                stream = sd.OutputStream(
-                    device=device_id,
-                    samplerate=f.samplerate,
-                    channels=max_ch, # Always open all channels
-                    callback=callback,
-                    latency='low', 
-                    blocksize=1024 
-                )
-                stream.start()
-            except Exception as e:
-                print(f"DEBUG ENGINE: Failed to start stream on device {device_id}, retrying on default device. Error: {e}", flush=True)
-                stream = sd.OutputStream(
-                    device=None,
-                    samplerate=f.samplerate,
-                    channels=2, 
-                    callback=callback,
-                    latency='low', 
-                    blocksize=1024 
-                )
-                stream.start()
-
+            s = _Stream(file_path, audio, file, volume, loop, on_finished, output_channels, filter_type, filter_freq)
             with self.lock:
-                self.streams[stream_id] = {
-                    "stream": stream,
-                    "ctx": ctx,
-                    "path": file_path
-                }
-            
-            duration = f.frames / f.samplerate
+                stream_id = self.next_stream_id
+                self.next_stream_id += 1
+
+            with self._pa_lock:
+                s.stream = self._start_stream(device_id, s.samplerate, max_ch, self._make_callback(s, stream_id))
+            with self.lock:
+                self.streams[stream_id] = s
+
+            duration = s.frames / s.samplerate
+            log.info("Stream %s started: %s (%.2fs) on device %s", stream_id, os.path.basename(file_path), duration, device_id)
             return stream_id, duration
 
+        except Exception:
+            log.exception("Error starting playback of %s", file_path)
+            raise
+
+    def _make_callback(self, s, stream_id):
+        def callback(outdata, frames, time_info, status):
+            try:
+                self._fill(s, stream_id, outdata, frames, status)
+            except sd.CallbackStop:
+                raise
+            except Exception as e:
+                # A decode/seek error mid-stream (e.g. a corrupt file) must end
+                # this stream cleanly instead of aborting PortAudio's thread.
+                log.error("Callback error on stream %s, stopping it: %r", stream_id, e, exc_info=True)
+                outdata.fill(0)
+                s.finished = True
+                s.notify_finished(stream_id)
+                raise sd.CallbackStop
+        return callback
+
+    def _next_block(self, s, frames):
+        """Up to `frames` samples shaped (n, channels), looping if asked. Fewer
+        than requested means the end was reached (and s.finished is set)."""
+        parts, got, empty_rewinds = [], 0, 0
+        while got < frames:
+            want = frames - got
+            if s.data is not None:
+                chunk = s.data[s.cursor:s.cursor + want]
+                s.cursor += len(chunk)
+            else:
+                chunk = s.file.read(want, dtype='float32', always_2d=True)
+            if len(chunk):
+                parts.append(chunk)
+                got += len(chunk)
+                empty_rewinds = 0
+            if got < frames:  # reached the end
+                if s.loop and empty_rewinds < 2:  # rewinding an empty file would spin forever
+                    if s.data is not None:
+                        s.cursor = 0
+                    else:
+                        s.file.seek(0)
+                    empty_rewinds += 1
+                else:
+                    s.finished = True
+                    break
+        if not parts:
+            return np.zeros((0, s.channels), dtype='float32')
+        return parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+    def _fill(self, s, stream_id, outdata, frames, status):
+        if status:
+            # PortAudio reports underflow/overflow here; rate-limit the log.
+            s.underflows += 1
+            now = time.monotonic()
+            if now - s.last_status_log > 5:
+                s.last_status_log = now
+                log.warning("Stream %s audio status: %s (occurrences so far: %d)", stream_id, status, s.underflows)
+
+        outdata.fill(0)
+        if s.finished or s.closed:
+            s.notify_finished(stream_id)
+            raise sd.CallbackStop
+
+        block = self._next_block(s, frames)
+        n = len(block)
+        if n:
+            # A new array: the decoded data is shared and must never be modified.
+            block = block * (s.volume * self.master_volume)
+            if s.fade_remaining > 0:
+                fade = min(n, s.fade_remaining)
+                done = s.fade_total - s.fade_remaining
+                ramp = np.linspace(done / s.fade_total, (done + fade) / s.fade_total, fade, dtype='float32')
+                block[:fade] *= ramp[:, None]
+                s.fade_remaining -= fade
+
+            self._route(block, outdata, s.output_channels)
+
+            # Soft-knee limiter: squashes peaks near 1.0 instead of clipping.
+            np.tanh(outdata[:n], out=outdata[:n])
+
+            # Meter what is actually heard on hardware channels 0 and 1.
+            heard = outdata[:n]
+            peaks = np.max(np.abs(heard), axis=0)
+            rms = np.sqrt(np.mean(heard ** 2, axis=0))
+            self.stream_levels[stream_id] = (
+                float(rms[0]), float(rms[1]) if len(rms) > 1 else 0.0,
+                float(peaks[0]), float(peaks[1]) if len(peaks) > 1 else 0.0,
+            )
+        else:
+            self.stream_levels[stream_id] = (0.0, 0.0, 0.0, 0.0)
+
+        if s.finished:
+            s.notify_finished(stream_id)
+            raise sd.CallbackStop
+
+    @staticmethod
+    def _route(block, outdata, targets):
+        """Copies block (n, channels) into outdata, honouring per-pad routing."""
+        n, ch_in = block.shape
+        out_ch = outdata.shape[1]
+        if targets is None:
+            if ch_in == 1 and out_ch >= 2:
+                outdata[:n, 0] = block[:, 0]
+                outdata[:n, 1] = block[:, 0]
+            elif ch_in == out_ch:
+                outdata[:n] = block
+            else:
+                m = min(ch_in, out_ch)
+                outdata[:n, :m] = block[:, :m]
+        else:
+            for i, target in enumerate(targets):
+                if 0 <= target < out_ch:
+                    outdata[:n, target] = block[:, i % ch_in]
+
+    def _start_stream(self, device_id, samplerate, channels, callback):
+        """Opens and starts an output stream, recovering from device errors
+        (e.g. PaMacCore -9986 "Unspecified Audio Hardware Error").
+
+        PortAudio numbers devices once, when it initialises. If a device is
+        plugged, unplugged or reconfigured afterwards (a display going to sleep,
+        a USB/Bluetooth interface, a sample-rate change by another app) those
+        numbers go stale and opening the old index fails. Recovery: remember the
+        device's name, re-initialise PortAudio (only possible when nothing else
+        is playing, as it closes every stream), look the name up again, and
+        retry; otherwise fall back to the system default."""
+        def open_(dev, ch):
+            log.info("Opening output stream: device=%s samplerate=%s channels=%s", dev, samplerate, ch)
+            stream = sd.OutputStream(
+                device=dev,
+                samplerate=samplerate,
+                channels=ch,
+                callback=callback,
+                latency='low',
+                blocksize=1024,
+            )
+            stream.start()
+            log.info("Output stream started: device=%s latency=%.1fms", dev, stream.latency * 1000)
+            return stream
+
+        with self.lock:
+            wanted_name = self.device_cache.get(device_id, {}).get("name") if device_id is not None else None
+
+        try:
+            return open_(device_id, channels)
         except Exception as e:
-            print(f"Error starting playback: {e}")
-            raise e
+            log.error("Failed to start stream on device %s (%s): %s", device_id, wanted_name, e)
+            self._log_device_snapshot("at failure")
+
+        with self.lock:
+            idle = not self.streams
+        if idle:
+            try:
+                sd._terminate()
+                sd._initialize()
+                with self.lock:
+                    self.device_cache = {}
+                log.warning("PortAudio re-initialised after stream failure")
+                self._log_device_snapshot("after re-init")
+                new_id = self._find_device_by_name(wanted_name) if wanted_name else device_id
+                if self.on_devices_changed:
+                    try:
+                        self.on_devices_changed()
+                    except Exception:
+                        log.exception("on_devices_changed callback failed")
+                if new_id is not None:
+                    if new_id != device_id:
+                        log.warning("Device %r moved from index %s to %s", wanted_name, device_id, new_id)
+                    return open_(new_id, channels)
+                log.warning("Device %r is no longer present", wanted_name)
+            except Exception:
+                log.exception("Recovery after re-init failed for device %s", device_id)
+        else:
+            log.warning("Cannot re-initialise PortAudio while other streams are playing")
+
+        log.warning("Falling back to default output device")
+        return open_(None, 2)
+
+    def _find_device_by_name(self, name):
+        for i, dev in enumerate(sd.query_devices()):
+            if dev['max_output_channels'] > 0 and dev['name'] == name:
+                return i
+        return None
+
+    def _log_device_snapshot(self, when):
+        try:
+            names = [f"{i}:{d['name']}(out={d['max_output_channels']})" for i, d in enumerate(sd.query_devices())]
+            log.info("Devices %s: %s | default=%s", when, names, sd.default.device)
+        except Exception:
+            log.exception("Could not snapshot devices %s", when)
+
+    # ── Control ────────────────────────────────────────────────────────────
 
     def stop(self, stream_id):
         with self.lock:
             if stream_id in self.streams:
+                log.info("Stopping stream %s", stream_id)
                 self._cleanup_stream_locked(stream_id, self.streams[stream_id])
+            else:
+                log.debug("Stop requested for unknown stream %s", stream_id)
 
     def stop_all(self):
         with self.lock:
             ids = list(self.streams.keys())
+            log.info("Stopping all streams: %s", ids)
             for sid in ids:
                 self.stop(sid)
+
+    def unload(self, file_path):
+        """Forgets a file (its pad was cleared or removed): stops anything still
+        playing it and frees its decoded audio."""
+        with self.lock:
+            for sid in [sid for sid, s in self.streams.items() if s.path == file_path]:
+                log.info("Stopping stream %s: its file was unloaded", sid)
+                self._cleanup_stream_locked(sid, self.streams[sid])
+        freed = self.cache.evict(file_path)
+        log.info("Unloaded %s (was cached: %s; cache now %d files, %.1fMB)",
+                 os.path.basename(file_path), freed, len(self.cache), self.cache.total_bytes / 1e6)
 
     def set_master_volume(self, volume):
         with self.lock:
             self.master_volume = max(0.0, min(1.0, volume))
 
-    def get_levels(self):
-        """Returns aggregated Master Levels and a 16-band spectrum."""
-        with self.lock:
-            self._prune_finished_streams_locked()
-            active_ids = list(self.streams.keys())
-        
-        rms_l_pow = 0.0
-        rms_r_pow = 0.0
-        peak_l_max = 0.0
-        peak_r_max = 0.0
-        
-        to_remove = []
-        for sid, levels in list(self.stream_levels.items()):
-            if sid not in active_ids:
-                to_remove.append(sid)
-                continue
-            
-            rl, rr, pl, pr = levels
-            # Sum of powers for RMS
-            rms_l_pow += rl**2
-            rms_r_pow += rr**2
-            # Max for Peaks
-            peak_l_max = max(peak_l_max, pl)
-            peak_r_max = max(peak_r_max, pr)
-
-        for sid in to_remove:
-            del self.stream_levels[sid]
-            
-        return (
-            min(1.0, np.sqrt(rms_l_pow)),
-            min(1.0, np.sqrt(rms_r_pow)),
-            min(1.0, peak_l_max),
-            min(1.0, peak_r_max),
-            [] # Spectrum placeholder
-        )
-
-    def _cleanup_stream_locked(self, stream_id, stream_obj):
-        ctx = stream_obj.get("ctx", {})
-        try:
-            stream_obj["stream"].stop()
-        except Exception:
-            pass
-        try:
-            stream_obj["stream"].close()
-        except Exception:
-            pass
-        try:
-            ctx["file"].close()
-        except Exception:
-            pass
-
-        # Fire on_finished if the stream was pruned before the callback could do it.
-        # This ensures Flutter always receives audio_finished and clears the active stream.
-        if not ctx.get("on_finished_called", True) and ctx.get("on_finished"):
-            ctx["on_finished_called"] = True
-            try:
-                ctx["on_finished"](stream_id)
-            except Exception as e:
-                print(f"on_finished error during cleanup: {e}")
-
-        self.stream_levels.pop(stream_id, None)
-        self.streams.pop(stream_id, None)
-
-    def _prune_finished_streams_locked(self):
-        stale_ids = []
-        for sid, stream_obj in list(self.streams.items()):
-            try:
-                finished = bool(stream_obj["ctx"].get("finished", False))
-                active = bool(stream_obj["stream"].active)
-                if finished or not active:
-                    stale_ids.append(sid)
-            except Exception:
-                stale_ids.append(sid)
-
-        for sid in stale_ids:
-            stream_obj = self.streams.get(sid)
-            if stream_obj is not None:
-                self._cleanup_stream_locked(sid, stream_obj)
-
     def set_volume(self, stream_id, volume):
+        if volume is None:
+            return
         with self.lock:
             if stream_id in self.streams:
-                self.streams[stream_id]["ctx"]["volume"] = volume
+                self.streams[stream_id].volume = volume
 
     def set_looping(self, stream_id, loop):
         with self.lock:
             if stream_id in self.streams:
-                self.streams[stream_id]["ctx"]["loop"] = loop
+                self.streams[stream_id].loop = loop
 
     def set_routing(self, stream_id, output_channels):
         with self.lock:
             if stream_id in self.streams:
-                self.streams[stream_id]["ctx"]["output_channels"] = output_channels
+                self.streams[stream_id].output_channels = output_channels
 
     def set_filter(self, stream_id, filter_type, freq):
         """Updates filter parameters for a stream."""
         with self.lock:
             if stream_id in self.streams:
-                ctx = self.streams[stream_id]["ctx"]
-                ctx["filter_type"] = filter_type
-                ctx["filter_freq"] = freq
+                s = self.streams[stream_id]
+                s.filter_type = filter_type
+                s.filter_freq = freq
 
     def seek(self, stream_id, position_seconds):
         """Seeks to a specific position in seconds."""
         with self.lock:
-            if stream_id in self.streams:
-                s = self.streams[stream_id]
-                ctx = s["ctx"]
-                f = ctx["file"]
-                
-                # Calculate frame position
-                target_frame = int(position_seconds * f.samplerate)
-                
-                if ctx["is_preloaded"]:
-                    # Clamp to buffer size
-                    ctx["cursor"] = max(0, min(target_frame, len(ctx["data"])))
-                else:
-                    # Seek file pointer
-                    f.seek(max(0, min(target_frame, f.frames)))
-                
-                # If it was finished, we might need to reset finished flag?
-                # But usually seek happens while playing or paused.
-                # If it stopped, the stream might be closed already.
-                ctx["finished"] = False
+            s = self.streams.get(stream_id)
+            if s is None:
+                return
+            if s.closed:
+                log.warning("Seek on stream %s ignored: already closed", stream_id)
+                return
+            target = max(0, min(int(position_seconds * s.samplerate), s.frames))
+            log.info("Seek stream %s to %.2fs", stream_id, position_seconds)
+            if s.data is not None:
+                s.cursor = target
+            else:
+                s.file.seek(target)
+            s.finished = False
+
+    def get_levels(self):
+        """Returns aggregated master levels (rms_l, rms_r, peak_l, peak_r, spectrum)."""
+        with self.lock:
+            self._prune_finished_streams_locked()
+            active_ids = set(self.streams.keys())
+
+        rms_l_pow = rms_r_pow = peak_l = peak_r = 0.0
+        for sid in list(self.stream_levels):
+            if sid not in active_ids:
+                self.stream_levels.pop(sid, None)
+                continue
+            rl, rr, pl, pr = self.stream_levels[sid]
+            rms_l_pow += rl ** 2
+            rms_r_pow += rr ** 2
+            peak_l = max(peak_l, pl)
+            peak_r = max(peak_r, pr)
+
+        return (
+            min(1.0, np.sqrt(rms_l_pow)),
+            min(1.0, np.sqrt(rms_r_pow)),
+            min(1.0, peak_l),
+            min(1.0, peak_r),
+            [],  # Spectrum placeholder
+        )
+
+    def stats(self):
+        return (f"streams={len(self.streams)} cached_files={len(self.cache)} "
+                f"cache={self.cache.total_bytes / 1e6:.0f}MB")
+
+    def _cleanup_stream_locked(self, stream_id, s):
+        # Tell the audio callback first, so it never reads a closed file.
+        s.closed = True
+        s.finished = True
+        steps = [("stop", s.stream.stop), ("close", s.stream.close)]
+        if s.file is not None:
+            steps.append(("file close", s.file.close))
+        for step, fn in steps:
+            try:
+                fn()
+            except Exception as e:
+                log.warning("Stream %s %s failed: %r", stream_id, step, e)
+        log.info("Stream %s cleaned up (%s)", stream_id, os.path.basename(s.path))
+
+        # Fire on_finished if the stream was pruned before the callback could do it.
+        # This ensures Flutter always receives audio_finished and clears the active stream.
+        try:
+            s.notify_finished(stream_id)
+        except Exception:
+            log.exception("on_finished callback failed during cleanup of stream %s", stream_id)
+
+        self.stream_levels.pop(stream_id, None)
+        self.streams.pop(stream_id, None)
+
+    def _prune_finished_streams_locked(self):
+        for sid, s in list(self.streams.items()):
+            try:
+                gone = s.finished or not s.stream.active
+            except Exception:
+                gone = True
+            if gone:
+                self._cleanup_stream_locked(sid, s)
+
+    # ── Waveform ───────────────────────────────────────────────────────────
 
     def get_waveform(self, file_path, points=100):
-        """Generates a simplified waveform using fast block-based reading."""
+        """Returns (normalized peak amplitudes, duration seconds). Decoding is
+        shared with playback through the cache, so a pad that has a waveform is
+        also ready to play instantly."""
         try:
-            stat = os.stat(file_path)
-            cache_key = (file_path, int(points), int(stat.st_mtime), stat.st_size)
-            cached = self.waveform_cache.get(cache_key)
-            if cached is not None:
-                return cached
-
-            with sf.SoundFile(file_path) as f:
-                frames = f.frames
-                if frames == 0:
-                    return [], 0.0
-                
-                # Determine block size
-                block_size = max(1, frames // points)
-                waveform = []
-                
-                # Read absolute max of each block
-                # This is extremely fast and light on memory
-                for _ in range(points):
-                    data = f.read(block_size, dtype='float32')
-                    if len(data) == 0:
-                        break
-                    # Peak of absolute values in this block
-                    val = np.max(np.abs(data))
-                    waveform.append(float(val))
-                
-                # Normalize
-                peak = max(waveform) if waveform else 0
-                if peak > 0:
-                    waveform = [v / peak for v in waveform]
-                
-                duration = frames / f.samplerate
-                result = (waveform, duration)
-                if len(self.waveform_cache) >= self.waveform_cache_limit:
-                    # Drop oldest inserted key (dict preserves insertion order).
-                    oldest = next(iter(self.waveform_cache), None)
-                    if oldest is not None:
-                        del self.waveform_cache[oldest]
-                self.waveform_cache[cache_key] = result
-                return result
-
-        except Exception as e:
-            print(f"Error generating waveform: {e}")
+            audio = self.cache.load(file_path)
+            if audio is not None:
+                return self._peaks(audio.data, points), audio.frames / audio.samplerate
+            return self._waveform_streaming(file_path, points)
+        except Exception:
+            log.exception("Error generating waveform for %s", file_path)
             return [], 0.0
+
+    @staticmethod
+    def _peaks(data, points):
+        frames = len(data)
+        if frames == 0:
+            return []
+        block = max(1, frames // points)
+        n = min(points, frames // block)
+        peaks = np.abs(data[:n * block]).max(axis=1).reshape(n, block).max(axis=1)
+        top = float(peaks.max())
+        return (peaks / top).tolist() if top > 0 else peaks.tolist()
+
+    def _waveform_streaming(self, file_path, points):
+        """Waveform for files too large to cache: read block by block."""
+        with sf.SoundFile(file_path) as f:
+            if f.frames == 0:
+                return [], 0.0
+            block = max(1, f.frames // points)
+            peaks = []
+            for _ in range(points):
+                data = f.read(block, dtype='float32')
+                if len(data) == 0:
+                    break
+                peaks.append(float(np.max(np.abs(data))))
+            top = max(peaks) if peaks else 0
+            if top > 0:
+                peaks = [v / top for v in peaks]
+            return peaks, f.frames / f.samplerate

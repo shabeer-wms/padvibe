@@ -1,20 +1,30 @@
-import "package:flutter/foundation.dart";
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:get/get.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:padvibe/app/core/logging/app_log.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as status;
 
+/// Launches and supervises the Python sidecar (audio + MIDI engine) and keeps
+/// a WebSocket to it alive.
+///
+/// - Packaged builds run the one-dir bundle shipped next to the app; dev
+///   builds fall back to `python3 sidecar/midi_server.py`.
+/// - If the socket drops while the process is alive, it reconnects with
+///   backoff. If the process dies, it is restarted with backoff (max 5 tries).
 class SidecarService extends GetxService {
-  File? _logFile;
+  static const _maxRestarts = 5;
+  static const _maxReconnectsBeforeRestart = 20;
+
   final sidecarStatus = 'Not Started'.obs;
   final wsConnectionStatus = 'Disconnected'.obs;
   final lastError = ''.obs;
   final sidecarPid = Rxn<int>();
 
-  String get logFilePath => _logFile?.path ?? 'No log file';
+  String get logFilePath => AppLog.path;
 
   // Initialization progress for splash screen
   final initStatusText = 'Initializing...'.obs;
@@ -23,8 +33,24 @@ class SidecarService extends GetxService {
   WebSocketChannel? _channel;
   Process? _pythonProcess;
   bool _isServerReady = false;
-  Timer? _healthCheckTimer;
+  bool _disposed = false;
   int _discoveredPort = 8765; // Default port
+  int _restartCount = 0;
+  int _reconnectAttempt = 0;
+  Timer? _reconnectTimer;
+  Timer? _restartTimer;
+  Timer? _heartbeat;
+
+  // High-frequency traffic is counted and summarised by the heartbeat rather
+  // than logged line by line.
+  static const _noisyIn = {'audio_levels', 'midi_message'};
+  static const _noisyOut = {
+    'set_volume',
+    'set_master_volume',
+    'set_routing',
+    'set_filter',
+  };
+  final Map<String, int> _noisyCounts = {};
 
   int get lastDiscoveredPort => _discoveredPort;
 
@@ -34,44 +60,27 @@ class SidecarService extends GetxService {
   @override
   void onInit() {
     super.onInit();
-    _initLogging();
+    _heartbeat = Timer.periodic(const Duration(seconds: 60), (_) {
+      _log(
+        'heartbeat: rss=${ProcessInfo.currentRss ~/ 1048576}MB '
+        'maxRss=${ProcessInfo.maxRss ~/ 1048576}MB '
+        'sidecar=${sidecarStatus.value} ws=${wsConnectionStatus.value} '
+        'pid=${sidecarPid.value} traffic(last 60s)=$_noisyCounts',
+      );
+      _noisyCounts.clear();
+    });
     _startPythonSidecar();
   }
 
-  Future<void> _initLogging() async {
-    try {
-      final appDir = await getApplicationSupportDirectory();
-      final logDir = Directory('${appDir.path}/logs');
-      if (!await logDir.exists()) {
-        await logDir.create(recursive: true);
-      }
-      _logFile = File(
-        '${logDir.path}/sidecar_${DateTime.now().millisecondsSinceEpoch}.log',
-      );
-      await _log('=== PadVibe Sidecar Log ===');
-      await _log(
-        'Platform: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}',
-      );
-      await _log('Executable: ${Platform.resolvedExecutable}');
-    } catch (e) {
-      debugPrint('Failed to initialize logging: $e');
-    }
-  }
-
-  Future<void> _log(String message) async {
-    final timestamp = DateTime.now().toIso8601String();
-    final logMessage = '[$timestamp] $message';
-    debugPrint(logMessage);
-    try {
-      await _logFile?.writeAsString('$logMessage\n', mode: FileMode.append);
-    } catch (e) {
-      debugPrint('Failed to write to log file: $e');
-    }
-  }
+  Future<void> _log(String message) async => AppLog.log('sidecar', message);
 
   @override
   void onClose() {
-    _healthCheckTimer?.cancel();
+    _disposed = true;
+    _log('SidecarService closing');
+    _heartbeat?.cancel();
+    _reconnectTimer?.cancel();
+    _restartTimer?.cancel();
     _channel?.sink.close(status.goingAway);
     _stopPythonSidecar();
     super.onClose();
@@ -90,243 +99,199 @@ class SidecarService extends GetxService {
     }
   }
 
-  int _healthCheckFailCount = 0;
+  /// Finds what to launch: the packaged one-dir bundle, or (dev) the Python
+  /// script. Returns null when neither exists.
+  Future<({String exe, List<String> args})?> _resolveSidecar() async {
+    final exeDir = File(Platform.resolvedExecutable).parent;
+    final sep = Platform.pathSeparator;
+    final binary = Platform.isWindows ? 'midi_server.exe' : 'midi_server';
 
-  void _startHealthCheck() {
-    _healthCheckTimer?.cancel();
-    _healthCheckFailCount = 0;
-    _healthCheckTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      if (_pythonProcess != null) {
-        try {
-          // Use 'kill -0' which is very fast and standard on Unix to check process existence
-          final result = Process.runSync('kill', [
-            '-0',
-            '${_pythonProcess!.pid}',
-          ]);
-          if (result.exitCode != 0) {
-            _healthCheckFailCount++;
-            if (_healthCheckFailCount >= 2) {
-              sidecarStatus.value = 'Stopped';
-              lastError.value =
-                  'Sidecar process terminated unexpectedly (Health check failed)';
-            }
-          } else {
-            _healthCheckFailCount = 0;
-            sidecarStatus.value = 'Running';
-          }
-        } catch (e) {
-          // ignore or log
+    // Packaged layout (see scripts/bundle_sidecar_macos.sh and the CMake install rules):
+    //   macOS:          PadVibe.app/Contents/Resources/sidecar/midi_server
+    //   Windows/Linux:  <bundle>/sidecar/midi_server[.exe]
+    final packaged = Platform.isMacOS
+        ? '${exeDir.parent.path}/Resources/sidecar/$binary'
+        : '${exeDir.path}${sep}sidecar$sep$binary';
+    await _log('Checking path: $packaged');
+    if (await File(packaged).exists()) {
+      return (exe: packaged, args: <String>[]);
+    }
+
+    // Development fallback: run the script with the system Python.
+    final scripts = [
+      if (Platform.isMacOS)
+        '${exeDir.parent.path}/Frameworks/App.framework/Resources/flutter_assets/sidecar/midi_server.py',
+      '${exeDir.path}${sep}data${sep}flutter_assets${sep}sidecar${sep}midi_server.py',
+      'sidecar/midi_server.py',
+    ];
+    for (final script in scripts) {
+      if (await File(script).exists()) {
+        await _log('Packaged sidecar not found; using Python script: $script');
+        return (exe: Platform.isWindows ? 'python' : 'python3', args: [script]);
+      }
+    }
+    return null;
+  }
+
+  /// Kills a leftover sidecar still holding port 8765 (e.g. after the app was
+  /// force-quit). Only our own process is killed; anything else is left alone
+  /// since the sidecar can bind the next free port.
+  Future<void> _killStaleSidecar() async {
+    if (!(Platform.isMacOS || Platform.isLinux)) return;
+    try {
+      final lsof = await Process.run(
+        Platform.isMacOS ? '/usr/sbin/lsof' : 'lsof',
+        ['-t', '-i:8765', '-sTCP:LISTEN'],
+      );
+      for (final pidStr in lsof.stdout.toString().trim().split('\n')) {
+        if (pidStr.isEmpty) continue;
+        final ps = await Process.run('ps', ['-p', pidStr, '-o', 'command=']);
+        if (ps.stdout.toString().contains('midi_server')) {
+          await _log('Killing stale sidecar $pidStr using port 8765');
+          initStatusText.value = 'Terminating stale process $pidStr...';
+          await Process.run('kill', ['-9', pidStr]);
+          await Future.delayed(const Duration(milliseconds: 500));
         }
       }
-    });
+    } catch (e) {
+      _log('Error cleaning up stale sidecar: $e');
+    }
   }
 
   Future<void> _startPythonSidecar() async {
+    if (_disposed) return;
     await _log('Starting Python Sidecar...');
     initStatusText.value = 'Cleaning up previous processes...';
     sidecarStatus.value = 'Starting';
     lastError.value = '';
 
-    // Kill any process using port 8765
-    try {
-      await _log('Checking for processes using port 8765...');
-      if (Platform.isMacOS || Platform.isLinux) {
-        // Use absolute paths for reliability
-        final lsofHeader = await Process.run('/usr/sbin/lsof', [
-          '-t',
-          '-i:8765',
-        ]);
-        final output = lsofHeader.stdout.toString().trim();
-        if (output.isNotEmpty) {
-          final pids = output.split('\n');
-          for (final pid in pids) {
-            if (pid.isNotEmpty) {
-              await _log('Killing process $pid using port 8765');
-              initStatusText.value = 'Terminating stale process $pid...';
-              await Process.run('/bin/kill', ['-9', pid]);
-            }
-          }
-          await Future.delayed(const Duration(milliseconds: 500));
-        }
-      }
-    } catch (e) {
-      debugPrint('Error cleaning up port 8765: $e');
-    }
+    await _killStaleSidecar();
 
     initStatusText.value = 'Locating Sidecar binary...';
     try {
-      String? executablePath;
-
-      if (Platform.isMacOS) {
-        final binDir = File(Platform.resolvedExecutable).parent;
-        final bundleDir = binDir.parent;
-        final assetPath = 'sidecar/dist/midi_server';
-
-        // Try multiple potential paths for robustness
-        final potentialPaths = [
-          '${bundleDir.path}/Frameworks/App.framework/Resources/flutter_assets/$assetPath',
-          '${bundleDir.path}/Frameworks/App.framework/Versions/Current/Resources/flutter_assets/$assetPath',
-          '${bundleDir.path}/Resources/flutter_assets/$assetPath',
-        ];
-
-        for (final path in potentialPaths) {
-          await _log('Checking path: $path');
-          if (await File(path).exists()) {
-            executablePath = path;
-            await _log('Found binary at: $path');
-            break;
-          }
-        }
-      } else {
-        executablePath = 'sidecar/dist/midi_server';
+      final cmd = await _resolveSidecar();
+      if (cmd == null) {
+        throw Exception('Could not locate sidecar binary or python script.');
       }
 
-      if (executablePath != null && await File(executablePath).exists()) {
-        await _log('Found sidecar binary at $executablePath');
-
-        // Check if file is executable
-        final stat = await File(executablePath).stat();
-        await _log('Binary permissions: ${stat.modeString()}');
-
-        initStatusText.value = 'Starting Sidecar binary...';
-
-        if (Platform.isMacOS || Platform.isLinux) {
-          try {
-            final chmodResult = await Process.run('/bin/chmod', [
-              '+x',
-              executablePath,
-            ]);
-            await _log('chmod result: exit=${chmodResult.exitCode}');
-          } catch (e) {
-            await _log('Chmod failed: $e');
-          }
-        }
-
-        // Verify code signature on macOS
-        if (Platform.isMacOS) {
-          try {
-            final codesignResult = await Process.run('codesign', [
-              '-dv',
-              executablePath,
-            ]);
-            await _log('Code signing status: ${codesignResult.stderr}');
-          } catch (e) {
-            await _log('Code signature check failed: $e');
-          }
-        }
-
-        try {
-          _pythonProcess = await Process.start(
-            executablePath,
-            [],
-            runInShell: false,
-          );
-        } catch (e) {
-          await _log('FATAL: Failed to start sidecar binary: $e');
-          throw Exception('Failed to start sidecar binary: $e');
-        }
-      } else {
-        // Fallback Logic - Try to find the script in assets if binary missing
-        debugPrint(
-          'Sidecar binary not found. Trying python script fallback...',
-        );
-        initStatusText.value = 'Binary missing. Trying Python...';
-
-        // Attempt to find absolute path to script in bundle
-        String? scriptPath;
-        if (Platform.isMacOS) {
-          final binDir = File(Platform.resolvedExecutable).parent;
-          final bundleDir = binDir.parent;
-          final scriptRel = 'sidecar/midi_server.py';
-          final potentialScripts = [
-            '${bundleDir.path}/Frameworks/App.framework/Resources/flutter_assets/$scriptRel',
-            '${bundleDir.path}/Resources/flutter_assets/$scriptRel',
-          ];
-          for (final p in potentialScripts) {
-            if (await File(p).exists()) {
-              scriptPath = p;
-              break;
-            }
-          }
-        } else {
-          scriptPath = 'sidecar/midi_server.py';
-        }
-
-        if (scriptPath != null) {
-          _pythonProcess = await Process.start('python3', [
-            scriptPath,
-          ], runInShell: true);
-        } else {
-          throw Exception(
-            'Could not locate sidecar binary OR python script in bundle.',
-          );
-        }
-      }
-
-      if (_pythonProcess != null) {
-        sidecarPid.value = _pythonProcess!.pid;
-        await _log('Sidecar process started with PID: ${_pythonProcess!.pid}');
-        await _log(
-          'Machine Architecture: ${Platform.version}',
-        ); // Logs some system info
-        _startHealthCheck();
-
-        // Monitor for unexpected exit
-        _pythonProcess!.exitCode.then((code) async {
-          await _log('Sidecar process exited with code $code');
-          sidecarPid.value = null;
-          if (code != 0) {
-            sidecarStatus.value = 'Error';
-            final msg =
-                'Sidecar crashed (Code $code). Check logs at: ${_logFile?.path}';
-            lastError.value = 'Crashed with code $code. Check log file.';
-            initStatusText.value = msg;
-            await _log('FATAL ERROR: $msg');
-          } else {
-            sidecarStatus.value = 'Stopped';
-          }
+      if (Platform.isMacOS || Platform.isLinux) {
+        await Process.run('/bin/chmod', ['+x', cmd.exe]).catchError((e) {
+          _log('Chmod failed: $e');
+          return ProcessResult(0, 1, '', '');
         });
       }
 
-      _pythonProcess?.stdout.transform(utf8.decoder).listen((data) async {
-        final trimmed = data.trim();
-        final isImportant =
-            trimmed.contains('PORT_BIND_SUCCESS:') ||
-            trimmed.contains('Starting WebSocket server') ||
-            trimmed.contains('ERROR') ||
-            trimmed.contains('Error');
-        if (isImportant) {
-          await _log('SIDECAR OUT: $trimmed');
-        }
-        if (data.contains('PORT_BIND_SUCCESS:')) {
-          final portStr = data.split('PORT_BIND_SUCCESS:').last.trim();
-          final port = int.tryParse(portStr);
-          if (port != null) {
-            _discoveredPort = port;
-            await _log('Detected sidecar port: $_discoveredPort');
-            _connectToWebSocket(port: _discoveredPort, retries: 20);
-          }
-        }
-      });
+      initStatusText.value = 'Starting Sidecar...';
+      final proc = await Process.start(
+        cmd.exe,
+        cmd.args,
+        // The sidecar exits when this pid disappears (its own parent is the
+        // PyInstaller bootloader, which outlives a force-quit app).
+        environment: {
+          'PADVIBE_PARENT_PID': '$pid',
+          'PYTHONUNBUFFERED': '1',
+          // The sidecar writes its own rotating log and crash dump here.
+          'PADVIBE_LOG_DIR': AppLog.directory,
+        },
+      );
+      _pythonProcess = proc;
+      sidecarPid.value = proc.pid;
+      await _log('Sidecar process started with PID: ${proc.pid}');
 
-      _pythonProcess?.stderr.transform(utf8.decoder).listen((data) async {
-        await _log('SIDECAR ERR: $data');
+      proc.exitCode.then((code) => _onSidecarExit(proc, code));
+
+      proc.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) async {
+            AppLog.log('sidecar-out', line);
+            // The sidecar prints exactly this at the start of a line once it listens.
+            if (line.startsWith('PORT_BIND_SUCCESS:')) {
+              final port = int.tryParse(line.split(':').last.trim());
+              if (port != null) {
+                _discoveredPort = port;
+                await _log('Detected sidecar port: $_discoveredPort');
+                _reconnectAttempt = 0;
+                _connectToWebSocket();
+              }
+            }
+          });
+
+      proc.stderr.transform(utf8.decoder).listen((data) async {
+        AppLog.log('sidecar-err', data.trimRight());
         // Capture ANY stderr as potential error if sidecar is not initialized
         if (!isInitialized.value) {
           lastError.value = data.trim();
         }
       });
 
-      initStatusText.value = 'Waiting for Sidecar to initialize...';
-      // No longer using fixed delay, waiting for PORT_BIND_SUCCESS signal
+      // The very first launch after install is slow while the OS verifies the
+      // bundled libraries; later launches take about a second.
+      initStatusText.value =
+          'Waiting for Sidecar to initialize (first launch can take ~15s)...';
     } catch (e, stackTrace) {
       await _log('Error starting Python sidecar: $e');
       await _log('Stack trace: $stackTrace');
       sidecarStatus.value = 'Error';
       final errorMsg =
-          'Initialization Error: ${e.toString()}\nLog: ${_logFile?.path}';
+          'Initialization Error: ${e.toString()}\nLog: ${AppLog.path}';
       initStatusText.value = errorMsg;
       lastError.value = errorMsg;
+      _scheduleSidecarRestart();
+    }
+  }
+
+  Future<void> _onSidecarExit(Process proc, int code) async {
+    if (!identical(_pythonProcess, proc)) return; // superseded by a restart
+    await _log('Sidecar process exited with code $code');
+    _pythonProcess = null;
+    sidecarPid.value = null;
+    _isServerReady = false;
+    _reconnectTimer?.cancel();
+    _channel?.sink.close();
+    _channel = null;
+    wsConnectionStatus.value = 'Disconnected';
+    if (_disposed) {
+      sidecarStatus.value = 'Stopped';
+      return;
+    }
+    sidecarStatus.value = code == 0 ? 'Stopped' : 'Error';
+    if (code != 0) {
+      final msg =
+          'Sidecar crashed (Code $code). Check logs at: ${AppLog.path}';
+      lastError.value = 'Crashed with code $code. Check log file.';
+      initStatusText.value = msg;
+      await _log('FATAL ERROR: $msg');
+    }
+    _scheduleSidecarRestart();
+  }
+
+  void _scheduleSidecarRestart() {
+    if (_disposed) return;
+    if (_restartCount >= _maxRestarts) {
+      sidecarStatus.value = 'Error';
+      initStatusText.value =
+          'Sidecar keeps failing. Check logs at: ${AppLog.path}';
+      _log('Giving up after $_maxRestarts restart attempts');
+      return;
+    }
+    final delay = Duration(seconds: math.min(1 << _restartCount, 15));
+    _restartCount++;
+    _log('Restarting sidecar in ${delay.inSeconds}s (attempt $_restartCount)');
+    _restartTimer?.cancel();
+    _restartTimer = Timer(delay, _startPythonSidecar);
+  }
+
+  /// Restarts the sidecar on demand (e.g. from Settings > Diagnostics).
+  void restartSidecar() {
+    _log('Manual sidecar restart requested');
+    _restartCount = 0;
+    _restartTimer?.cancel();
+    final proc = _pythonProcess;
+    if (proc != null) {
+      proc.kill(); // the exit handler starts a fresh one
+    } else {
+      _startPythonSidecar();
     }
   }
 
@@ -335,7 +300,7 @@ class SidecarService extends GetxService {
   }
 
   void _stopPythonSidecar() {
-    debugPrint('Stopping Python Sidecar...');
+    _log('Stopping Python Sidecar...');
     sidecarStatus.value = 'Stopped';
     shutdownSidecar();
     Future.delayed(const Duration(milliseconds: 100), () {
@@ -343,75 +308,85 @@ class SidecarService extends GetxService {
     });
   }
 
-  Future<void> _connectToWebSocket({int? port, int retries = 5}) async {
-    final int currentPort = port ?? _discoveredPort;
-    debugPrint(
-      'Connecting to WebSocket on port $currentPort (Attempts left: $retries)...',
-    );
+  Future<void> _connectToWebSocket() async {
+    if (_disposed) return;
+    final port = _discoveredPort;
+    _log('Connecting to WebSocket on port $port...');
     initStatusText.value = 'Establishing WebSocket connection...';
     wsConnectionStatus.value = 'Connecting';
 
     try {
-      final wsUrl = Uri.parse('ws://127.0.0.1:$currentPort');
-      _channel = WebSocketChannel.connect(wsUrl);
-
-      try {
-        await _channel!.ready;
-      } catch (e) {
-        throw WebSocketChannelException('Connection failed: $e');
+      // dart:io sends protocol-level pings and closes the socket when a pong
+      // is missed, so a hung sidecar surfaces as onDone and triggers reconnect.
+      final channel = IOWebSocketChannel.connect(
+        Uri.parse('ws://127.0.0.1:$port'),
+        pingInterval: const Duration(seconds: 10),
+        connectTimeout: const Duration(seconds: 5),
+      );
+      await channel.ready;
+      if (_disposed) {
+        channel.sink.close();
+        return;
       }
 
-      _channel?.stream.listen(
-        (message) {
-          _handleWebSocketMessage(message);
-        },
-        onDone: () {
-          debugPrint('WebSocket connection closed');
-          _isServerReady = false;
-          wsConnectionStatus.value = 'Disconnected';
-        },
-        onError: (error) {
-          debugPrint('WebSocket error: $error');
-          _isServerReady = false;
-          wsConnectionStatus.value = 'Error';
-          lastError.value = error.toString();
-          if (retries > 0) {
-            initStatusText.value = 'Connection failed, retrying ($retries)...';
-            Future.delayed(
-              const Duration(seconds: 1),
-              () =>
-                  _connectToWebSocket(port: currentPort, retries: retries - 1),
-            );
-          }
-        },
-      );
-
+      _channel = channel;
+      _reconnectAttempt = 0;
+      _restartCount = 0;
       _isServerReady = true;
       wsConnectionStatus.value = 'Connected';
-      initStatusText.value = 'WebSocket Connected. Starting engines...';
-      debugPrint('WebSocket connected!');
-
+      sidecarStatus.value = 'Running';
       initStatusText.value = 'System Ready.';
       isInitialized.value = true;
-    } catch (e) {
-      debugPrint('Error connecting to WebSocket: $e');
-      wsConnectionStatus.value = 'Error';
+      _log('WebSocket connected on port $port');
 
+      channel.stream.listen(
+        (message) => _handleWebSocketMessage(message as String),
+        onDone: () => _onSocketLost(channel, null),
+        onError: (Object error) => _onSocketLost(channel, error),
+        cancelOnError: true,
+      );
+    } catch (e) {
+      _log('Error connecting to WebSocket: $e');
+      wsConnectionStatus.value = 'Error';
       if (sidecarStatus.value != 'Error') {
         lastError.value = e.toString();
       }
-
-      if (retries > 0) {
-        if (sidecarStatus.value == 'Error' ||
-            sidecarStatus.value == 'Stopped') {
-          initStatusText.value = 'Sidecar failed. Cannot connect.';
-          return;
-        }
-        initStatusText.value = 'Retrying WebSocket ($retries)...';
-        await Future.delayed(const Duration(seconds: 1));
-        _connectToWebSocket(port: currentPort, retries: retries - 1);
-      }
+      _scheduleReconnect();
     }
+  }
+
+  void _onSocketLost(WebSocketChannel channel, Object? error) {
+    if (!identical(channel, _channel)) return; // stale socket
+    _log('WebSocket lost: ${error ?? 'closed'}');
+    _channel = null;
+    _isServerReady = false;
+    wsConnectionStatus.value = error == null ? 'Disconnected' : 'Error';
+    if (error != null) {
+      lastError.value = error.toString();
+    }
+    _scheduleReconnect();
+  }
+
+  /// Reconnects with backoff (0.5s, 1s, 2s, 4s, then 5s) while the process is
+  /// alive. If it never answers, kill it so the exit handler restarts it.
+  void _scheduleReconnect() {
+    if (_disposed || _pythonProcess == null) {
+      return; // exit handler owns restarts
+    }
+    if (_reconnectAttempt >= _maxReconnectsBeforeRestart) {
+      _log(
+        'Sidecar unresponsive after $_reconnectAttempt reconnects; restarting it',
+      );
+      _pythonProcess?.kill();
+      return;
+    }
+    final delay = Duration(
+      milliseconds: math.min(500 * (1 << math.min(_reconnectAttempt, 4)), 5000),
+    );
+    _reconnectAttempt++;
+    initStatusText.value = 'Reconnecting to sidecar ($_reconnectAttempt)...';
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(delay, _connectToWebSocket);
   }
 
   void _handleWebSocketMessage(String message) {
@@ -419,11 +394,10 @@ class SidecarService extends GetxService {
       final data = jsonDecode(message);
       final type = data['type'];
 
-      // Global status handling
-      if (type == 'status') {
-        debugPrint('Sidecar Status: ${data['message']}');
-      } else if (type == 'error') {
-        debugPrint('Sidecar Error: ${data['message']}');
+      if (_noisyIn.contains(type)) {
+        _count('in:$type');
+      } else {
+        _log('<- $type${_detail(data)}');
       }
 
       // Dispatch to handlers
@@ -433,18 +407,43 @@ class SidecarService extends GetxService {
         }
       }
     } catch (e) {
-      debugPrint('Error parsing WebSocket message: $e');
+      _log('Error parsing WebSocket message: $e');
     }
   }
 
   void send(String message) {
-    if (_channel != null && _isServerReady) {
-      try {
-        _channel!.sink.add(message);
-      } catch (e) {
-        debugPrint('Error sending message to WebSocket: $e');
-        _isServerReady = false;
-      }
+    final command =
+        RegExp(r'"command"\s*:\s*"(\w+)"').firstMatch(message)?.group(1) ?? '?';
+    if (_channel == null || !_isServerReady) {
+      _log(
+        'DROPPED command $command: sidecar not connected '
+        '(ws=${wsConnectionStatus.value}, process=${sidecarStatus.value})',
+      );
+      return;
     }
+    if (_noisyOut.contains(command)) {
+      _count('out:$command');
+    } else {
+      _log('-> ${message.length > 300 ? '${message.substring(0, 300)}…' : message}');
+    }
+    try {
+      _channel!.sink.add(message);
+    } catch (e) {
+      _log('Error sending $command to WebSocket: $e');
+      _isServerReady = false;
+    }
+  }
+
+  void _count(String key) => _noisyCounts[key] = (_noisyCounts[key] ?? 0) + 1;
+
+  /// The interesting fields of a message, without bulky payloads.
+  String _detail(Map data) {
+    final parts = <String>[
+      for (final k in ['stream_id', 'message', 'file_path', 'duration_seconds', 'device_id'])
+        if (data.containsKey(k)) '$k=${data[k]}',
+      for (final k in ['devices', 'data'])
+        if (data[k] is List) '$k[${(data[k] as List).length}]',
+    ];
+    return parts.isEmpty ? '' : ' ${parts.join(' ')}';
   }
 }

@@ -67,7 +67,9 @@ padvibe/
 │   ├── audio_engine.py         # sounddevice/numpy DSP & Playback
 │   ├── midi_engine.py          # mido MIDI Listener
 │   ├── midi_server.py          # WebSocket Server
-│   └── build_sidecar.sh        # PyInstaller Build Script
+│   ├── midi_server.spec        # PyInstaller spec (one-dir, all OSes)
+│   ├── build_sidecar.sh        # Builds sidecar/dist/midi_server/
+│   └── smoke_test.py           # Ping / devices / playback check
 ├── assets/                     # UI Assets & Screenshots
 └── native_lib/                 # Native C++ bridges (if any)
 ```
@@ -101,6 +103,38 @@ padvibe/
     ```bash
     flutter run
     ```
+    In development the app runs `sidecar/midi_server.py` with your system Python.
+
+### Release builds
+The sidecar is packaged as a **one-dir** PyInstaller bundle that ships next to the app
+(`PadVibe.app/Contents/Resources/sidecar/`, or `<bundle>/sidecar/` on Windows and Linux).
+One-file builds are avoided on purpose: they re-extract on every launch, which costs ~13s
+on macOS versus under 1s for one-dir.
+
+```bash
+make build-sidecar      # sidecar/dist/midi_server/
+make test-sidecar       # smoke test (python sidecar/smoke_test.py [path/to/binary])
+make build-macos        # flutter build + bundle the sidecar into PadVibe.app
+```
+Windows and Linux: run `sidecar/build_sidecar.sh` first, then `flutter build windows|linux --release`;
+the CMake install rules copy the sidecar into the bundle. CI (`.github/workflows/release.yml`)
+builds macOS (arm64 + Intel), Windows and Linux on every `vX.Y.Z` tag. The first launch after
+install is slower (~15s) while macOS verifies the bundled libraries.
+
+---
+
+## 🪵 Logs
+
+Everything is logged; attach these when reporting a problem. They live in
+`~/Library/Application Support/com.pro26.pads/logs/` (macOS) or the app-support folder on Windows and Linux:
+
+| File | Contents |
+| :--- | :--- |
+| `padvibe_<time>.log` | One per launch: app start, window and lifecycle events (sleep/wake/quit, memory pressure), uncaught errors, every command sent to and message received from the audio engine, all engine output, and a 60-second heartbeat with memory use. |
+| `sidecar_engine.log` | The audio/MIDI engine's own detailed log (rotating, survives an app crash). |
+| `sidecar_crash.log` | Native crash dumps (stack traces) and a stack dump if the engine ever stops responding. |
+
+If macOS reports a crash it also writes `~/Library/Logs/DiagnosticReports/PadVibe-*.ips`.
 
 ---
 

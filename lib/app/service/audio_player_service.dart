@@ -232,6 +232,18 @@ class AudioPlayerService extends GetxService {
 
   List<double>? getWaveform(String path) => _waveforms[path];
 
+  /// Forgets a file everywhere: the sidecar frees its audio and stops any
+  /// stream still playing it, and cached waveform/duration data is dropped.
+  void unload(String path) {
+    _audioEngine.unloadAudio(path);
+    _waveforms.remove(path);
+    _fileDurations.remove(path);
+    _waveformFailures.remove(path);
+    _waveformRetryAfter.remove(path);
+    _pendingWaveforms.remove(path);
+    _inactiveSeekPositions.remove(path);
+  }
+
   Future<void> loadWaveform(String path) async {
     if (_waveforms.containsKey(path)) return; // Already loaded
 

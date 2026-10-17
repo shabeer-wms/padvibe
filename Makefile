@@ -12,7 +12,7 @@ PYTHON ?= python3
 PIP ?= pip3
 
 .PHONY: help doctor deps deps-python deps-flutter clean format analyze test check \
-	build-sidecar build-macos build-all run run-macos
+	build-sidecar build-macos build-all test-sidecar run run-macos
 
 help:
 	@echo "PadVibe Make targets"
@@ -26,7 +26,8 @@ help:
 	@echo "  make test            - Run flutter tests"
 	@echo "  make check           - analyze + test"
 	@echo "  make clean           - flutter clean"
-	@echo "  make build-sidecar   - Build/sign Python sidecar binary"
+	@echo "  make build-sidecar   - Build the Python sidecar (one-dir bundle)"
+	@echo "  make test-sidecar    - Smoke-test the sidecar (ping, devices, playback)"
 	@echo "  make build-macos     - Build macOS release app"
 	@echo "  make build-all       - Build sidecar + macOS release"
 	@echo "  make run             - Run Flutter app (default target platform)"
@@ -69,6 +70,10 @@ build-sidecar:
 
 build-macos:
 	$(FLUTTER) build macos --release
+	./scripts/bundle_sidecar_macos.sh build/macos/Build/Products/Release/PadVibe.app
+
+test-sidecar:
+	$(PYTHON) sidecar/smoke_test.py
 
 build-all: build-sidecar build-macos
 

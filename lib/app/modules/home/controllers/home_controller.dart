@@ -149,6 +149,7 @@ class HomeController extends GetxController {
       // Sanitize pads and load waveforms
       _sanitizeCurrentPads();
       _loadAllWaveforms();
+      unawaited(_pruneOrphanFiles());
 
       // Restore audio device from splash-provided data
       final savedDeviceName = args['savedAudioDeviceName'] as String?;
@@ -260,10 +261,19 @@ class HomeController extends GetxController {
         changed = true;
         continue;
       }
+      // Pads from older versions point at the user's original file; move
+      // them into the app library so they keep working.
       if (!kIsWeb) {
         final padPath = pads[i].path;
-        if (padPath != null) {
-          unawaited(_copyAndSwapPadPathInBackground(i, padPath));
+        if (padPath != null && !await storage.isInAudioLibrary(padPath)) {
+          try {
+            pads[i] = pads[i].copyWith(
+              path: await storage.importAudioFile(padPath),
+            );
+            changed = true;
+          } catch (e) {
+            debugPrint('Could not copy $padPath into the library: $e');
+          }
         }
       }
     }
@@ -356,6 +366,10 @@ class HomeController extends GetxController {
   void deleteTab(int index) {
     if (groups.length <= 1) return; // Don't delete the last tab
 
+    final removedPaths = groups[index].pads
+        .map((pad) => pad.path)
+        .whereType<String>()
+        .toSet();
     groups.removeAt(index);
 
     // Adjust index
@@ -371,6 +385,11 @@ class HomeController extends GetxController {
     // Force refresh of pads
     switchTab(currentGroupIndex.value);
     _saveGroups();
+
+    // Free audio that only the deleted tab used.
+    for (final path in removedPaths) {
+      unawaited(_releaseFile(path));
+    }
   }
 
   // --- Pad Actions ---
@@ -489,13 +508,15 @@ class HomeController extends GetxController {
 
   Future<void> clearPad(int index) async {
     final pad = pads[index];
-    if (pad.path != null) {
-      await audioService.stopPath(pad.path!);
+    final path = pad.path;
+    if (path != null) {
+      await audioService.stopPath(path);
     }
     // Reset pad but keep name and color
     pads[index] = Pad(name: pad.name, color: pad.color);
     _updateCurrentGroup();
     await _saveGroups();
+    if (path != null) await _releaseFile(path);
   }
 
   void toggleLoop(int index) {
@@ -699,63 +720,42 @@ class HomeController extends GetxController {
     await storage.saveFaders(faders.toList());
   }
 
+  /// Formats the sidecar's decoder (libsndfile) can actually read. AAC/M4A are
+  /// not among them, so they are not offered.
+  static const supportedAudioExtensions = ['mp3', 'wav', 'ogg', 'flac'];
+
+  static bool isSupportedAudioFile(String name) =>
+      supportedAudioExtensions.contains(p.extension(name).replaceFirst('.', '').toLowerCase());
+
   Future<void> assignFileToPad(int index) async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: false,
       type: FileType.custom,
-      allowedExtensions: const ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a'],
+      allowedExtensions: supportedAudioExtensions,
     );
-    if (result == null || result.files.isEmpty) return;
-    final path = result.files.first.path;
+    final path = result?.files.firstOrNull?.path;
     if (path == null) return;
-
-    // Set loading state
-    pads[index] = pads[index].copyWith(isLoading: true);
-
-    try {
-      final sourcePath = path;
-      pads[index] = pads[index].copyWith(path: sourcePath);
-      _updateCurrentGroup();
-      await _saveGroups();
-
-      // Load from source immediately for fast UX.
-      await audioService.loadWaveform(sourcePath);
-      if (!kIsWeb) {
-        unawaited(_copyAndSwapPadPathInBackground(index, sourcePath));
-      }
-    } finally {
-      pads[index] = pads[index].copyWith(isLoading: false);
-    }
+    await _assignFile(index, path);
   }
 
   Future<void> addFiles() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       type: FileType.custom,
-      allowedExtensions: const ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a'],
+      allowedExtensions: supportedAudioExtensions,
     );
     if (result == null) return;
 
-    final available = <int>[];
-    for (var i = 0; i < pads.length; i++) {
-      if (pads[i].path == null) available.add(i);
-    }
-
-    int idx = 0;
-    for (final f in result.files) {
-      if (idx >= available.length) break;
-      if (f.path == null) continue;
-
-      final slot = available[idx++];
-      final sourcePath = f.path!;
-      pads[slot] = pads[slot].copyWith(path: sourcePath);
-      unawaited(audioService.loadWaveform(sourcePath));
-      if (!kIsWeb) {
-        unawaited(_copyAndSwapPadPathInBackground(slot, sourcePath));
-      }
-    }
-    _updateCurrentGroup();
-    await _saveGroups();
+    final available = <int>[
+      for (var i = 0; i < pads.length; i++)
+        if (pads[i].path == null) i,
+    ];
+    final paths = result.files.map((f) => f.path).whereType<String>().toList();
+    // Copy and decode the files in parallel.
+    await Future.wait([
+      for (var i = 0; i < paths.length && i < available.length; i++)
+        _assignFile(available[i], paths[i]),
+    ]);
   }
 
   Future<void> stopAll() async {
@@ -802,75 +802,73 @@ class HomeController extends GetxController {
 
   void increment() => count.value++;
 
-  void assignFilePathToPad(int index, String data) async {
-    // Set loading state
-    pads[index] = pads[index].copyWith(isLoading: true);
+  /// Drag-and-drop assignment.
+  Future<void> assignFilePathToPad(int index, String data) =>
+      _assignFile(index, data);
 
+  /// Puts a file on a pad. The file is copied into the app's audio library
+  /// first, so the pad keeps working if the original moves, and the pad only
+  /// ever has one path. Loading the waveform decodes the file once in the
+  /// sidecar; every later play reuses that decode.
+  Future<void> _assignFile(int index, String sourcePath) async {
+    if (index < 0 || index >= pads.length) return;
+    final previous = pads[index].path;
+    pads[index] = pads[index].copyWith(isLoading: true);
     try {
-      // Drag-and-drop assignment: use source path immediately, copy in background.
-      final sourcePath = data;
-      pads[index] = pads[index].copyWith(path: sourcePath);
+      var path = sourcePath;
+      if (!kIsWeb && !await storage.isInAudioLibrary(sourcePath)) {
+        try {
+          path = await storage.importAudioFile(sourcePath);
+        } catch (e) {
+          debugPrint(
+            'Could not copy $sourcePath into the library, using it in place: $e',
+          );
+        }
+      }
+      pads[index] = pads[index].copyWith(path: path);
       _updateCurrentGroup();
       await _saveGroups();
-
-      await audioService.loadWaveform(sourcePath);
-      if (!kIsWeb) {
-        unawaited(_copyAndSwapPadPathInBackground(index, sourcePath));
-      }
+      await audioService.loadWaveform(path);
+      if (previous != null && previous != path) await _releaseFile(previous);
     } finally {
-      pads[index] = pads[index].copyWith(isLoading: false);
+      if (index < pads.length) {
+        pads[index] = pads[index].copyWith(isLoading: false);
+      }
     }
   }
 
-  Future<void> _copyAndSwapPadPathInBackground(
-    int index,
-    String sourcePath,
-  ) async {
+  bool _isPathUsed(String path) =>
+      pads.any((pad) => pad.path == path) ||
+      groups.any((g) => g.pads.any((pad) => pad.path == path));
+
+  /// Frees a file no pad uses any more: the sidecar's decoded audio, and the
+  /// library copy on disk (originals outside the library are never deleted).
+  Future<void> _releaseFile(String path) async {
+    if (_isPathUsed(path)) return;
+    audioService.unload(path);
+    if (!kIsWeb) await storage.deleteLibraryFile(path);
+  }
+
+  /// Deletes library files that no pad refers to (older versions never cleaned
+  /// up). Skipped unless at least one pad uses a library file, which proves the
+  /// pad data loaded correctly.
+  Future<void> _pruneOrphanFiles() async {
     if (kIsWeb) return;
-    if (index < 0 || index >= pads.length) return;
-    if (pads[index].path != sourcePath) return;
-
-    final inLib = await storage.isInAudioLibrary(sourcePath);
-    if (inLib) return;
-
-    String copiedPath;
-    try {
-      copiedPath = await storage.importAudioFile(sourcePath);
-    } catch (_) {
-      return;
+    final referenced = <String>{
+      for (final g in groups)
+        for (final pad in g.pads)
+          if (pad.path != null) pad.path!,
+    };
+    var usesLibrary = false;
+    for (final path in referenced) {
+      if (await storage.isInAudioLibrary(path)) {
+        usesLibrary = true;
+        break;
+      }
     }
-
-    _swapPadPathWhenIdle(index, sourcePath, copiedPath, retries: 0);
-  }
-
-  void _swapPadPathWhenIdle(
-    int index,
-    String sourcePath,
-    String copiedPath, {
-    required int retries,
-  }) {
-    if (index < 0 || index >= pads.length) return;
-    if (pads[index].path != sourcePath) return;
-
-    if (audioService.isPlaying(sourcePath)) {
-      if (retries >= 10) return;
-      unawaited(
-        Future.delayed(const Duration(seconds: 2), () {
-          _swapPadPathWhenIdle(
-            index,
-            sourcePath,
-            copiedPath,
-            retries: retries + 1,
-          );
-        }),
-      );
-      return;
-    }
-
-    pads[index] = pads[index].copyWith(path: copiedPath);
-    _updateCurrentGroup();
-    unawaited(_saveGroups());
-    unawaited(audioService.loadWaveform(copiedPath));
+    if (!usesLibrary) return;
+    final n = await storage.pruneAudioLibrary(referenced);
+    if (n > 0) debugPrint('Audio library: removed $n unused file(s)');
   }
 
   // --- Settings ---

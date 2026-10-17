@@ -1,33 +1,16 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Builds the Python sidecar as a one-dir PyInstaller bundle at sidecar/dist/midi_server/.
+# Works on macOS, Linux and Windows (Git Bash). Override the interpreter with PYTHON=...
+set -euo pipefail
+cd "$(dirname "$0")/.."
 
-# Install PyInstaller if not present
-if ! python3 -m PyInstaller --version &> /dev/null; then
-    echo "PyInstaller not found. Installing..."
-    pip3 install pyinstaller
-fi
+PYTHON="${PYTHON:-python3}"
 
-# Install requirements
-echo "Installing requirements..."
-pip3 install -r sidecar/requirements.txt
+echo "Installing build requirements..."
+"$PYTHON" -m pip install --quiet pyinstaller -r sidecar/requirements.txt
 
-# Build the sidecar
-echo "Building sidecar binary..."
+echo "Building sidecar (one-dir)..."
+rm -rf sidecar/dist build/sidecar
+"$PYTHON" -m PyInstaller --noconfirm --distpath sidecar/dist --workpath build/sidecar sidecar/midi_server.spec
 
-# Use PyInstaller's own target-arch if supported, otherwise build native
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    # Clean old builds
-    rm -rf sidecar/dist build/midi_server
-    
-    # Just build native for now to ensure a working binary
-    echo "Building native binary..."
-    python3 -m PyInstaller --onefile --distpath sidecar/dist --name midi_server --hidden-import='mido.backends.rtmidi' sidecar/midi_server.py
-    
-    echo "Signing binary..."
-    codesign --force --deep --sign - sidecar/dist/midi_server
-    codesign --verify --verbose sidecar/dist/midi_server
-else
-    # Non-macOS build
-    python3 -m PyInstaller --onefile --distpath sidecar/dist --name midi_server --hidden-import='mido.backends.rtmidi' sidecar/midi_server.py
-fi
-
-echo "Build complete. Binary is at sidecar/dist/midi_server"
+echo "Build complete. Bundle is at sidecar/dist/midi_server/"

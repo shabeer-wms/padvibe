@@ -106,3 +106,15 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# Python sidecar: built by sidecar/build_sidecar.sh into sidecar/dist/midi_server.
+# Installed next to the executable as <bundle>/sidecar/midi_server[.exe].
+set(SIDECAR_DIST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../sidecar/dist/midi_server")
+if(EXISTS "${SIDECAR_DIST_DIR}")
+  install(DIRECTORY "${SIDECAR_DIST_DIR}/"
+    DESTINATION "${CMAKE_INSTALL_PREFIX}/sidecar"
+    USE_SOURCE_PERMISSIONS
+    COMPONENT Runtime)
+else()
+  message(WARNING "Sidecar not found at ${SIDECAR_DIST_DIR}; run sidecar/build_sidecar.sh before building a release.")
+endif()

@@ -61,6 +61,49 @@ class StorageService extends GetxService {
     }
   }
 
+  /// Deletes a file from the app audio library. Files outside the library
+  /// (the user's originals) are never touched.
+  Future<bool> deleteLibraryFile(String path) async {
+    if (kIsWeb || !await isInAudioLibrary(path)) return false;
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+        debugPrint('Audio library: deleted $path');
+        return true;
+      }
+    } catch (e) {
+      debugPrint('Audio library: could not delete $path: $e');
+    }
+    return false;
+  }
+
+  /// Removes library files no pad refers to (left behind by older versions or
+  /// an interrupted session). Recently written files are kept in case they are
+  /// mid-assignment. Returns how many files were deleted.
+  Future<int> pruneAudioLibrary(
+    Set<String> referencedPaths, {
+    Duration minAge = const Duration(minutes: 10),
+  }) async {
+    if (kIsWeb) return 0;
+    final libDir = await _ensureAudioDir();
+    final referenced = referencedPaths.map(p.normalize).toSet();
+    var deleted = 0;
+    await for (final entity in libDir.list()) {
+      if (entity is! File || referenced.contains(p.normalize(entity.path))) {
+        continue;
+      }
+      try {
+        final age = DateTime.now().difference((await entity.stat()).modified);
+        if (age < minAge) continue;
+        await entity.delete();
+        deleted++;
+        debugPrint('Audio library: pruned unused ${entity.path}');
+      } catch (_) {}
+    }
+    return deleted;
+  }
+
   Future<void> clearAudioLibrary() async {
     if (kIsWeb) return;
     final libDir = await _ensureAudioDir();

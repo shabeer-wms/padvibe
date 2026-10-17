@@ -54,7 +54,7 @@ class AudioEngineService extends GetxService {
         refreshAudioDevices();
       }
     });
-    
+
     // Also try immediately in case we are already connected (hot reload)
     if (_sidecar.wsConnectionStatus.value == 'Connected') {
       refreshAudioDevices();
@@ -78,6 +78,14 @@ class AudioEngineService extends GetxService {
   void refreshAudioDevices() {
     debugPrint('Refreshing Audio devices via Sidecar...');
     _sidecar.send(jsonEncode({'command': 'list_audio_devices'}));
+  }
+
+  /// Tells the sidecar a file is no longer used: it stops anything still
+  /// playing it and frees the decoded audio held in memory.
+  void unloadAudio(String filePath) {
+    _sidecar.send(
+      jsonEncode({'command': 'unload_audio', 'file_path': filePath}),
+    );
   }
 
   void requestWaveform(String filePath, {int points = 100}) {
@@ -124,10 +132,7 @@ class AudioEngineService extends GetxService {
   void setMasterVolume(double volume) {
     masterVolume.value = volume;
     _sidecar.send(
-      jsonEncode({
-        'command': 'set_master_volume',
-        'volume': volume,
-      }),
+      jsonEncode({'command': 'set_master_volume', 'volume': volume}),
     );
   }
 

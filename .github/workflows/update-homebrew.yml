@@ -1,46 +1,88 @@
 name: Update Homebrew Tap
 
+# Called by release.yml after the GitHub release exists. (A release created with
+# GITHUB_TOKEN does not trigger `on: release` workflows, so it is chained instead.)
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag, e.g. v1.9.0
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, e.g. v1.9.0
+        required: true
+        type: string
 
 jobs:
   update-tap:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      TAG: ${{ inputs.tag }}
 
     steps:
-      - name: Parse version from tag
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Check tap token
+        id: guard
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN not set; skipping tap update."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Download DMG and compute SHA256
+      - name: Compute checksums
+        if: steps.guard.outputs.run == 'true'
         id: sha
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          URL="https://github.com/shabeer-wms/padvibe/releases/download/${GITHUB_REF_NAME}/PadVibe-${VERSION}-Installer.dmg"
-          curl -fL -o padvibe.dmg "$URL"
-          echo "sha256=$(shasum -a 256 padvibe.dmg | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          VERSION="${TAG#v}"
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          for ARCH in arm64 x86_64; do
+            curl -fL -o "padvibe-$ARCH.dmg" "$BASE/PadVibe-${VERSION}-macos-${ARCH}.dmg"
+            echo "$ARCH=$(sha256sum "padvibe-$ARCH.dmg" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          done
 
       - name: Update tap repository
-        env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        if: steps.guard.outputs.run == 'true'
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          SHA256="${{ steps.sha.outputs.sha256 }}"
-
+          VERSION="${TAG#v}"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
 
           git clone \
-            https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/shabeer-wms/homebrew-padvibe.git \
-            tap
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/shabeer-wms/homebrew-padvibe.git" tap
 
-          sed -i '' \
-            's/version "[^"]*"/version "'"$VERSION"'"/' \
+          cat > tap/Casks/padvibe.rb <<'EOF'
+          cask "padvibe" do
+            arch arm: "arm64", intel: "x86_64"
+
+            version "__VERSION__"
+            sha256 arm:   "__SHA_ARM__",
+                   intel: "__SHA_INTEL__"
+
+            url "https://github.com/shabeer-wms/padvibe/releases/download/v#{version}/PadVibe-#{version}-macos-#{arch}.dmg"
+            name "PadVibe"
+            desc "Zero-latency audio palette for podcasters, streamers, and creators"
+            homepage "https://github.com/shabeer-wms/padvibe"
+
+            app "PadVibe.app"
+
+            zap trash: [
+              "~/Library/Application Support/com.pro26.pads",
+              "~/Library/Preferences/com.pro26.pads.plist",
+              "~/Library/Saved Application State/com.pro26.pads.savedState",
+            ]
+          end
+          EOF
+          sed -i.bak \
+            -e "s/__VERSION__/${VERSION}/" \
+            -e "s/__SHA_ARM__/${{ steps.sha.outputs.arm64 }}/" \
+            -e "s/__SHA_INTEL__/${{ steps.sha.outputs.x86_64 }}/" \
             tap/Casks/padvibe.rb
-          sed -i '' \
-            's/sha256 "[^"]*"/sha256 "'"$SHA256"'"/' \
-            tap/Casks/padvibe.rb
+          rm -f tap/Casks/padvibe.rb.bak
 
           cd tap
           git add Casks/padvibe.rb

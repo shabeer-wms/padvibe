@@ -24,6 +24,9 @@ fi
 
 echo "✅ Found built app: $APP_NAME at $APP_PATH"
 
+# 3b. Bundle the sidecar into the app and re-sign
+./scripts/bundle_sidecar_macos.sh "$APP_PATH"
+
 # 4. Define Version
 VERSION=$(grep 'version: ' pubspec.yaml | sed 's/version: //')
 CLEAN_VERSION=$(echo $VERSION | cut -d'+' -f1)

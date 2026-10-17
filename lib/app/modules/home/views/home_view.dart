@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'dart:async'; // added
+import 'package:padvibe/app/core/layout/breakpoints.dart';
 import 'package:padvibe/app/core/utils/formatters.dart';
 import 'package:padvibe/app/data/pad_model.dart';
 import 'package:desktop_drop/desktop_drop.dart';
@@ -9,6 +10,10 @@ import 'package:get/get.dart';
 
 import 'package:padvibe/app/service/midi_interface_service.dart'; // updated
 import '../controllers/home_controller.dart';
+import 'package:padvibe/app/core/widgets/panels.dart';
+import 'mixer/fader_dialog.dart';
+import 'pad_settings/pad_settings_dialog.dart';
+import 'settings/settings_dialog.dart';
 
 class HomeView extends GetView<HomeController> {
   const HomeView({super.key});
@@ -216,8 +221,17 @@ class HomeView extends GetView<HomeController> {
       Colors.lime,
       Colors.brown,
     ];
+    final expanded = WindowSize.of(context).isExpanded;
     return Scaffold(
       appBar: _appBar(context),
+      endDrawer: expanded
+          ? null
+          : Drawer(
+              width: 340,
+              child: SafeArea(
+                child: _buildMasterMonitor(context, docked: false),
+              ),
+            ),
       body: Focus(
         autofocus: true,
         focusNode: controller.focusNode,
@@ -281,7 +295,10 @@ class HomeView extends GetView<HomeController> {
                             builder: (context, constraints) {
                               return Obx(() {
                                 const spacing = 12.0;
-                                final cols = controller.gridColumns.value;
+                                final cols = responsiveGridColumns(
+                                  width: constraints.maxWidth,
+                                  preferred: controller.gridColumns.value,
+                                );
                                 final childAspect = 4 / 3;
 
                                 final foregroundIndices = <int>[];
@@ -396,7 +413,7 @@ class HomeView extends GetView<HomeController> {
                   ],
                 ),
               ),
-              _buildMasterMonitor(context),
+              if (expanded) _buildMasterMonitor(context),
             ],
           ),
         ),
@@ -414,12 +431,7 @@ class HomeView extends GetView<HomeController> {
       onDragDone: (detail) {
         if (detail.files.isEmpty) return;
         final f = detail.files.first;
-        if (!f.name.toLowerCase().endsWith('.mp3') &&
-            !f.name.toLowerCase().endsWith('.wav') &&
-            !f.name.toLowerCase().endsWith('.ogg') &&
-            !f.name.toLowerCase().endsWith('.flac') &&
-            !f.name.toLowerCase().endsWith('.aac') &&
-            !f.name.toLowerCase().endsWith('.m4a')) {
+        if (!HomeController.isSupportedAudioFile(f.name)) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Unsupported file type: ${f.name}')),
           );
@@ -432,58 +444,157 @@ class HomeView extends GetView<HomeController> {
   }
 
   AppBar _appBar(BuildContext context) {
+    final size = WindowSize.of(context);
+    final scheme = Theme.of(context).colorScheme;
     return AppBar(
-      title: const Text('PadVibe'),
-      centerTitle: false,
+      titleSpacing: 16,
+      title: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.graphic_eq, color: scheme.primary, size: 22),
+          const SizedBox(width: 10),
+          const Text('PadVibe'),
+        ],
+      ),
       actions: [
-        // Grid Size Selector
-        Obx(
-          () => DropdownButton<int>(
-            value: controller.gridColumns.value,
-            dropdownColor: Theme.of(context).colorScheme.surface,
-            underline: const SizedBox(),
-            icon: const Icon(Icons.grid_view),
-            onChanged: (val) {
-              if (val != null) controller.updateGridColumns(val);
-            },
-            items: [4, 5, 6, 8, 10]
-                .map((e) => DropdownMenuItem(value: e, child: Text('${e}x')))
-                .toList(),
+        // Engine status; opens Diagnostics.
+        Obx(() {
+          final connected =
+              controller.sidecarService.wsConnectionStatus.value == 'Connected';
+          final color = connected
+              ? const Color(0xFF2E9E5B)
+              : (controller.sidecarService.sidecarStatus.value == 'Error'
+                    ? const Color(0xFFD64545)
+                    : const Color(0xFFD08A00));
+          final label = connected ? 'Engine ready' : 'Engine starting…';
+          return Tooltip(
+            message: label,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(20),
+              onTap: () => SettingsDialog.show(
+                controller,
+                section: SettingsSection.diagnostics,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    if (!size.isCompact) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        label,
+                        style: Theme.of(context).textTheme.labelMedium,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          );
+        }),
+        if (!size.isCompact) ...[
+          IconButton(
+            tooltip: 'Floating timer',
+            icon: const Icon(Icons.picture_in_picture_alt_outlined),
+            onPressed: () => _toggleTimerOverlay(context),
           ),
-        ),
-        const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Audio output',
+            icon: const Icon(Icons.volume_up_outlined),
+            onPressed: () =>
+                SettingsDialog.show(controller, section: SettingsSection.audio),
+          ),
+          IconButton(
+            tooltip: 'MIDI devices',
+            icon: const Icon(Icons.piano_outlined),
+            onPressed: () =>
+                SettingsDialog.show(controller, section: SettingsSection.midi),
+          ),
+        ],
+        // Below the expanded breakpoint the mixer lives in a side drawer.
+        if (!size.isExpanded)
+          Builder(
+            builder: (ctx) => IconButton(
+              tooltip: 'Mixer',
+              icon: const Icon(Icons.tune),
+              onPressed: () => Scaffold.of(ctx).openEndDrawer(),
+            ),
+          ),
         IconButton(
           tooltip: 'Settings',
-          icon: const Icon(Icons.settings),
-          onPressed: () => _showSettingsDialog(context),
+          icon: const Icon(Icons.settings_outlined),
+          onPressed: () => SettingsDialog.show(controller),
         ),
-        IconButton(
-          tooltip: 'MIDI Devices',
-          icon: const Icon(Icons.piano),
-          onPressed: () => _showMidiDevicesDialog(context),
-        ),
-        IconButton(
-          tooltip: 'Audio Output',
-          icon: const Icon(Icons.volume_up),
-          onPressed: () => _showAudioOutputDialog(context),
-        ),
-        IconButton(
-          tooltip: 'Power',
-          icon: const Icon(Icons.power_settings_new),
-          onPressed: () {
-            if (_timerOverlay == null) {
-              _showTimerOverlay(context);
-            } else {
-              _hideTimerOverlay();
-            }
-          },
-        ),
-        const SizedBox(width: 8),
+        if (size.isCompact)
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            onSelected: (v) {
+              switch (v) {
+                case 'timer':
+                  _toggleTimerOverlay(context);
+                case 'audio':
+                  SettingsDialog.show(
+                    controller,
+                    section: SettingsSection.audio,
+                  );
+                case 'midi':
+                  SettingsDialog.show(
+                    controller,
+                    section: SettingsSection.midi,
+                  );
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'timer',
+                child: ListTile(
+                  leading: Icon(Icons.picture_in_picture_alt_outlined),
+                  title: Text('Floating timer'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'audio',
+                child: ListTile(
+                  leading: Icon(Icons.volume_up_outlined),
+                  title: Text('Audio output'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'midi',
+                child: ListTile(
+                  leading: Icon(Icons.piano_outlined),
+                  title: Text('MIDI devices'),
+                ),
+              ),
+            ],
+          ),
+        const SizedBox(width: 4),
       ],
     );
   }
 
+  void _toggleTimerOverlay(BuildContext context) {
+    if (_timerOverlay == null) {
+      _showTimerOverlay(context);
+    } else {
+      _hideTimerOverlay();
+    }
+  }
+
   Widget _buildBottomPanel(BuildContext context) {
+    final narrow = MediaQuery.sizeOf(context).width < 560;
     return Container(
       height: 60,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -520,11 +631,7 @@ class HomeView extends GetView<HomeController> {
                               index,
                               details.globalPosition,
                             ),
-                            onDoubleTapDown: (details) => _showRenameTabPopover(
-                              context,
-                              index,
-                              details.globalPosition,
-                            ),
+                            onDoubleTap: () => _renameTab(index),
                             child: ChoiceChip(
                               label: Text(group.name),
                               selected: isSelected,
@@ -547,7 +654,7 @@ class HomeView extends GetView<HomeController> {
               );
             }),
           ),
-          const SizedBox(width: 16),
+          SizedBox(width: narrow ? 8 : 16),
           // Timer display with icon
           Obx(() {
             final secs = controller.remainingSeconds.value;
@@ -558,7 +665,9 @@ class HomeView extends GetView<HomeController> {
                 Icon(Icons.access_time, color: accent, size: 18),
                 const SizedBox(width: 6),
                 Text(
-                  'Remaining: ${Formatters.formatRemaining(secs)}',
+                  narrow
+                      ? Formatters.formatRemaining(secs)
+                      : 'Remaining: ${Formatters.formatRemaining(secs)}',
                   style: TextStyle(
                     color: accent,
                     fontSize: 14,
@@ -569,7 +678,7 @@ class HomeView extends GetView<HomeController> {
               ],
             );
           }),
-          const SizedBox(width: 16),
+          SizedBox(width: narrow ? 4 : 16),
           // Stop All button
           IconButton(
             tooltip: 'Stop all',
@@ -582,17 +691,19 @@ class HomeView extends GetView<HomeController> {
     );
   }
 
-  Widget _buildMasterMonitor(BuildContext context) {
+  Widget _buildMasterMonitor(BuildContext context, {bool docked = true}) {
     return Container(
-      width: 320,
+      width: docked ? 320 : null,
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
-        border: Border(
-          left: BorderSide(
-            color: Theme.of(context).colorScheme.outlineVariant,
-            width: 1,
-          ),
-        ),
+        border: docked
+            ? Border(
+                left: BorderSide(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                  width: 1,
+                ),
+              )
+            : null,
       ),
       child: Row(
         children: [
@@ -609,40 +720,28 @@ class HomeView extends GetView<HomeController> {
     );
   }
 
-  void _showAddTabDialog(BuildContext context) {
-    final textCtrl = TextEditingController();
-    Get.dialog(
-      AlertDialog(
-        title: const Text('Add Tab'),
-        content: TextField(
-          controller: textCtrl,
-          decoration: const InputDecoration(hintText: 'Tab Name'),
-          autofocus: true,
-          onSubmitted: (val) {
-            if (val.isNotEmpty) {
-              controller.addTab(val);
-              Get.back();
-            }
-          },
-        ),
-        actions: [
-          TextButton(onPressed: Get.back, child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              if (textCtrl.text.isNotEmpty) {
-                controller.addTab(textCtrl.text);
-                Get.back();
-              }
-            },
-            child: const Text('Add'),
-          ),
-        ],
-      ),
+  Future<void> _showAddTabDialog(BuildContext context) async {
+    final name = await promptDialog(
+      title: 'New tab',
+      label: 'Tab name',
+      confirmLabel: 'Add',
+      icon: Icons.tab,
     );
+    if (name != null) controller.addTab(name);
+  }
+
+  Future<void> _renameTab(int index) async {
+    final name = await promptDialog(
+      title: 'Rename tab',
+      label: 'Tab name',
+      initial: controller.groups[index].name,
+      icon: Icons.tab,
+    );
+    if (name != null) controller.renameTab(index, name);
   }
 
   void _showTabOptions(BuildContext context, int index, Offset position) {
-    showMenu(
+    showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(
         position.dx,
@@ -650,47 +749,47 @@ class HomeView extends GetView<HomeController> {
         position.dx + 1,
         position.dy + 1,
       ),
-      items: [
+      items: const [
         PopupMenuItem(
           value: 'rename',
-          child: const ListTile(
-            leading: Icon(Icons.edit),
+          child: ListTile(
+            leading: Icon(Icons.edit_outlined),
             title: Text('Rename'),
             contentPadding: EdgeInsets.zero,
             dense: true,
           ),
-          onTap: () {
-            // Slight delay to allow menu to close before showing dialog/popover
-            Future.delayed(const Duration(milliseconds: 100), () {
-              if (context.mounted) {
-                _showRenameTabPopover(context, index, position);
-              }
-            });
-          },
         ),
         PopupMenuItem(
           value: 'delete',
-          child: const ListTile(
-            leading: Icon(Icons.delete, color: Colors.red),
+          child: ListTile(
+            leading: Icon(Icons.delete_outline, color: Colors.red),
             title: Text('Delete', style: TextStyle(color: Colors.red)),
             contentPadding: EdgeInsets.zero,
             dense: true,
           ),
-          onTap: () {
-            Future.delayed(const Duration(milliseconds: 100), () {
-              if (context.mounted) {
-                _showDeleteTabConfirmation(context, index);
-              }
-            });
-          },
         ),
       ],
-    );
+    ).then((value) async {
+      if (value == 'rename') {
+        await _renameTab(index);
+      } else if (value == 'delete') {
+        final ok = await confirmDialog(
+          title: 'Delete tab?',
+          message:
+              'All pads in “${controller.groups[index].name}” and their audio will be removed.',
+          confirmLabel: 'Delete',
+          destructive: true,
+        );
+        if (ok) controller.deleteTab(index);
+      }
+    });
   }
 
-  void _showRenameTabPopover(BuildContext context, int index, Offset position) {
-    final textCtrl = TextEditingController(text: controller.groups[index].name);
-    showMenu(
+  /// Right-click menu: the few things you do all the time. Everything else
+  /// lives in the pad settings dialog.
+  void _showPadOptions(BuildContext context, int index, Offset position) {
+    final hasFile = controller.pads[index].path != null;
+    showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(
         position.dx,
@@ -700,391 +799,10 @@ class HomeView extends GetView<HomeController> {
       ),
       items: [
         PopupMenuItem(
-          enabled: false, // Don't close on tap, handle manually
-          child: SizedBox(
-            width: 200,
-            child: TextField(
-              controller: textCtrl,
-              autofocus: true,
-              decoration: const InputDecoration(
-                hintText: 'Tab Name',
-                border: OutlineInputBorder(),
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 8,
-                ),
-              ),
-              onSubmitted: (val) {
-                if (val.isNotEmpty) {
-                  controller.renameTab(index, val);
-                  Navigator.of(context).pop(); // Close menu
-                }
-              },
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  void _showDeleteTabConfirmation(BuildContext context, int index) {
-    Get.dialog(
-      AlertDialog(
-        title: const Text('Delete Tab'),
-        content: const Text(
-          'Are you sure you want to delete this tab? All assigned pads in this tab will be lost.',
-        ),
-        actions: [
-          TextButton(onPressed: Get.back, child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              controller.deleteTab(index);
-              Get.back();
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showKeyboardShortcutDialog(int padIndex) {
-    final focusNode = FocusNode();
-    Get.dialog(
-      GestureDetector(
-        onTap: () => focusNode.requestFocus(),
-        child: KeyboardListener(
-          autofocus: true,
-          focusNode: focusNode..requestFocus(),
-          onKeyEvent: (event) {
-            if (event is KeyDownEvent) {
-              final key = event.logicalKey;
-
-              // Skip modifier keys alone
-              if (key == LogicalKeyboardKey.shiftLeft ||
-                  key == LogicalKeyboardKey.shiftRight ||
-                  key == LogicalKeyboardKey.controlLeft ||
-                  key == LogicalKeyboardKey.controlRight ||
-                  key == LogicalKeyboardKey.altLeft ||
-                  key == LogicalKeyboardKey.altRight ||
-                  key == LogicalKeyboardKey.metaLeft ||
-                  key == LogicalKeyboardKey.metaRight) {
-                return;
-              }
-
-              String? keyLabel;
-              // Get a human-readable key label
-              if (key.keyLabel.isNotEmpty) {
-                keyLabel = key.keyLabel.toUpperCase();
-              }
-
-              if (keyLabel != null && keyLabel.isNotEmpty) {
-                controller.assignKeyboardShortcut(padIndex, keyLabel);
-                Get.back();
-              }
-            }
-          },
-          child: AlertDialog(
-            title: const Text('Assign Keyboard Shortcut'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('Press any key to assign it to this pad.'),
-                const SizedBox(height: 16),
-                if (controller.pads[padIndex].keyboardShortcut != null) ...[
-                  Text(
-                    'Current: ${controller.pads[padIndex].keyboardShortcut}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  TextButton(
-                    onPressed: () {
-                      controller.assignKeyboardShortcut(padIndex, null);
-                      Get.back();
-                    },
-                    child: const Text('Remove Shortcut'),
-                  ),
-                ],
-              ],
-            ),
-            actions: [
-              TextButton(onPressed: Get.back, child: const Text('Cancel')),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showMidiDevicesDialog(BuildContext context) {
-    Get.dialog(
-      AlertDialog(
-        title: const Text('MIDI Devices'),
-        content: SizedBox(
-          width: 300,
-          child: Obx(() {
-            final devices = controller.midiService.devices;
-            final connected = controller.midiService.connectedDevice.value;
-            final wsStatus = controller.sidecarService.wsConnectionStatus.value;
-            final sidecarStatus = controller.sidecarService.sidecarStatus.value;
-
-            // Show loading if not connected to WS yet
-            if (wsStatus != 'Connected') {
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(height: 16),
-                  const CircularProgressIndicator(),
-                  const SizedBox(height: 16),
-                  Text('Sidecar: $sidecarStatus'),
-                  Text('Connection: $wsStatus'),
-                  if (controller.sidecarService.lastError.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      controller.sidecarService.lastError.value,
-                      style: const TextStyle(color: Colors.red, fontSize: 12),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                  const SizedBox(height: 16),
-                ],
-              );
-            }
-
-            if (devices.isEmpty) {
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text('No MIDI devices found.'),
-                  const SizedBox(height: 8),
-                  TextButton.icon(
-                    onPressed: controller.midiService.refreshDevices,
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Refresh'),
-                  ),
-                ],
-              );
-            }
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: devices.length,
-                  itemBuilder: (ctx, i) {
-                    final d = devices[i];
-                    final isConnected = connected?.id == d.id;
-                    return ListTile(
-                      title: Text(d.name),
-                      subtitle: Text(d.id),
-                      trailing: isConnected
-                          ? const Icon(Icons.check, color: Colors.green)
-                          : null,
-                      onTap: () {
-                        if (!isConnected) {
-                          controller.midiService.connect(d);
-                        } else {
-                          controller.midiService.disconnect();
-                        }
-                      },
-                    );
-                  },
-                ),
-                const Divider(),
-                TextButton.icon(
-                  onPressed: controller.midiService.refreshDevices,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Refresh List'),
-                ),
-              ],
-            );
-          }),
-        ),
-        actions: [
-          TextButton(
-            onPressed: controller.midiService.refreshDevices,
-            child: const Text('Refresh'),
-          ),
-          TextButton(onPressed: Get.back, child: const Text('Close')),
-        ],
-      ),
-    );
-  }
-
-  void _showAudioOutputDialog(BuildContext context) {
-    Get.dialog(
-      AlertDialog(
-        title: const Text('Audio Output Device'),
-        content: SizedBox(
-          width: 350,
-          child: Obx(() {
-            final devices = controller.audioService.outputDevices;
-            final selected = controller.audioService.selectedDevice.value;
-
-            if (devices.isEmpty) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(vertical: 20),
-                child: Text('No audio output devices found.'),
-              );
-            }
-
-            return ListView.builder(
-              shrinkWrap: true,
-              itemCount: devices.length,
-              itemBuilder: (ctx, i) {
-                final device = devices[i];
-                final isSelected = selected?.id == device.id;
-                final isDefault = device.isDefault;
-
-                return ListTile(
-                  title: Text(device.name),
-                  subtitle: isDefault ? const Text('System Default') : null,
-                  trailing: isSelected
-                      ? const Icon(Icons.check_circle, color: Colors.green)
-                      : null,
-                  onTap: () async {
-                    await controller.selectAudioDevice(device);
-                  },
-                );
-              },
-            );
-          }),
-        ),
-        actions: [
-          TextButton(
-            onPressed: controller.audioService.refreshOutputDevices,
-            child: const Text('Refresh'),
-          ),
-          TextButton(onPressed: Get.back, child: const Text('Close')),
-        ],
-      ),
-    );
-  }
-
-  void _showPadVolumeSettings(int index) {
-    Get.dialog(
-      AlertDialog(
-        title: const Text('Individual Pad Volume'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Obx(() {
-              final pad = controller.pads[index];
-              return Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Volume:'),
-                      Text('${(pad.volume * 100).toInt()}%'),
-                    ],
-                  ),
-                  Slider(
-                    value: pad.volume,
-                    onChanged: (val) => controller.updatePadVolume(index, val),
-                  ),
-                  if (pad.faderId != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8.0),
-                      child: Text(
-                        'Note: Linked to Mixer Fader',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Theme.of(Get.context!).colorScheme.secondary,
-                          fontStyle: FontStyle.italic,
-                        ),
-                      ),
-                    ),
-                ],
-              );
-            }),
-          ],
-        ),
-        actions: [TextButton(onPressed: Get.back, child: const Text('Done'))],
-      ),
-    );
-  }
-
-  void _showMidiLearnDialog(int padIndex) {
-    StreamSubscription? sub;
-    Get.dialog(
-      AlertDialog(
-        title: const Text('Assign MIDI Trigger'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Press a key on your MIDI controller...'),
-            const SizedBox(height: 16),
-            Obx(() {
-              final current = controller.pads[padIndex].midiNote;
-              if (current != null) {
-                return Column(
-                  children: [
-                    Text(
-                      'Current: ${MidiNoteEvent.getDisplayNameForId(current)}',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    TextButton(
-                      onPressed: () {
-                        controller.assignMidiNote(padIndex, null);
-                        sub?.cancel();
-                        Get.back();
-                      },
-                      child: const Text('Remove Assignment'),
-                    ),
-                  ],
-                );
-              }
-              return const SizedBox.shrink();
-            }),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              sub?.cancel();
-              Get.back();
-            },
-            child: const Text('Cancel'),
-          ),
-        ],
-      ),
-    ).then((_) => sub?.cancel());
-
-    sub = controller.midiService.noteStream.listen((event) {
-      bool isTrigger = false;
-      if (event.type == MidiEventType.noteOn) {
-        isTrigger = true;
-      } else if (event.type == MidiEventType.controlChange &&
-          event.velocity > 0) {
-        isTrigger = true;
-      }
-
-      if (isTrigger) {
-        controller.assignMidiNote(padIndex, event.triggerId);
-        sub?.cancel();
-        if (Get.isDialogOpen ?? false) Get.back();
-      }
-    });
-  }
-
-  void _showPadOptions(BuildContext context, int index, Offset position) {
-    showMenu(
-      context: context,
-      position: RelativeRect.fromLTRB(
-        position.dx,
-        position.dy,
-        position.dx + 1,
-        position.dy + 1,
-      ),
-      items: [
-        const PopupMenuItem(
           value: 'file',
           child: ListTile(
-            leading: Icon(Icons.audio_file),
-            title: Text('Assign File'),
+            leading: const Icon(Icons.audio_file_outlined),
+            title: Text(hasFile ? 'Replace file…' : 'Assign file…'),
             contentPadding: EdgeInsets.zero,
             dense: true,
           ),
@@ -1092,361 +810,58 @@ class HomeView extends GetView<HomeController> {
         const PopupMenuItem(
           value: 'rename',
           child: ListTile(
-            leading: Icon(Icons.edit),
+            leading: Icon(Icons.edit_outlined),
             title: Text('Rename'),
             contentPadding: EdgeInsets.zero,
             dense: true,
           ),
         ),
         const PopupMenuItem(
-          value: 'keyboard',
-          child: ListTile(
-            leading: Icon(Icons.keyboard),
-            title: Text('Keyboard Shortcut'),
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'midi',
-          child: ListTile(
-            leading: Icon(Icons.piano),
-            title: Text('MIDI Trigger'),
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'vol_midi',
-          child: ListTile(
-            leading: Icon(Icons.volume_up),
-            title: Text('Individual Volume'),
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-          ),
-        ),
-        PopupMenuItem(
-          value: 'background',
-          child: ListTile(
-            leading: Icon(
-              controller.pads[index].isBackground
-                  ? Icons.check_box
-                  : Icons.check_box_outline_blank,
-            ),
-            title: const Text('Background Pad'),
-            subtitle: const Text('Exclude from Local API'),
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'mixer',
-          child: ListTile(
-            leading: Icon(Icons.linear_scale),
-            title: Text('Mixer Fader'),
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'routing',
-          child: ListTile(
-            leading: Icon(Icons.router),
-            title: Text('Audio Routing'),
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'filters',
+          value: 'settings',
           child: ListTile(
             leading: Icon(Icons.tune),
-            title: Text('Filters & DSP'),
+            title: Text('Pad settings…'),
             contentPadding: EdgeInsets.zero,
             dense: true,
           ),
         ),
-        const PopupMenuItem(
-          value: 'clear',
-          child: ListTile(
-            leading: Icon(Icons.clear),
-            title: Text('Clear Pad'),
-            contentPadding: EdgeInsets.zero,
-            dense: true,
+        if (hasFile) ...[
+          const PopupMenuDivider(),
+          const PopupMenuItem(
+            value: 'clear',
+            child: ListTile(
+              leading: Icon(Icons.delete_outline, color: Colors.red),
+              title: Text('Clear pad', style: TextStyle(color: Colors.red)),
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+            ),
           ),
-        ),
+        ],
       ],
     ).then((value) {
-      if (value == 'file') controller.assignFileToPad(index);
-      if (value == 'rename') controller.startRenamingPad(index);
-      if (value == 'keyboard') _showKeyboardShortcutDialog(index);
-      if (value == 'midi') _showMidiLearnDialog(index);
-      if (value == 'vol_midi') _showPadVolumeSettings(index);
-      if (value == 'background') controller.toggleBackground(index);
-      if (value == 'mixer') _showFaderAssignmentDialog(index);
-      if (value == 'routing') _showAudioRoutingDialog(index);
-      if (value == 'filters') _showFilterDialog(index);
-      if (value == 'clear') controller.clearPad(index);
+      switch (value) {
+        case 'file':
+          controller.assignFileToPad(index);
+        case 'rename':
+          controller.startRenamingPad(index);
+        case 'settings':
+          PadSettingsDialog.show(controller, index);
+        case 'clear':
+          _confirmClearPad(index);
+      }
     });
   }
 
-  void _showFaderAssignmentDialog(int index) {
-    Get.dialog(
-      AlertDialog(
-        title: const Text('Assign to Mixer Fader'),
-        content: SizedBox(
-          width: 300,
-          child: Obx(() {
-            if (controller.faders.isEmpty) {
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text('No faders created yet.'),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: () {
-                      Get.back();
-                      _showAddFaderDialog(Get.context!);
-                    },
-                    child: const Text('Create Fader'),
-                  ),
-                ],
-              );
-            }
-
-            final currentFaderId = controller.pads[index].faderId;
-
-            return ListView.builder(
-              shrinkWrap: true,
-              itemCount: controller.faders.length + 1,
-              itemBuilder: (ctx, i) {
-                if (i == 0) {
-                  return ListTile(
-                    title: const Text('None (Individual Volume)'),
-                    trailing: currentFaderId == null
-                        ? const Icon(Icons.check, color: Colors.green)
-                        : null,
-                    onTap: () {
-                      controller.assignPadToFader(index, null);
-                      Get.back();
-                    },
-                  );
-                }
-                final fader = controller.faders[i - 1];
-                final isSelected = currentFaderId == fader.id;
-                return ListTile(
-                  title: Text(fader.name),
-                  trailing: isSelected
-                      ? const Icon(Icons.check, color: Colors.green)
-                      : null,
-                  onTap: () {
-                    controller.assignPadToFader(index, fader.id);
-                    Get.back();
-                  },
-                );
-              },
-            );
-          }),
-        ),
-        actions: [TextButton(onPressed: Get.back, child: const Text('Cancel'))],
-      ),
+  Future<void> _confirmClearPad(int index) async {
+    final pad = controller.pads[index];
+    final ok = await confirmDialog(
+      title: 'Clear ${pad.name}?',
+      message:
+          'The audio is removed from this pad and its copy in the PadVibe library is deleted. Your original file is not touched.',
+      confirmLabel: 'Clear pad',
+      destructive: true,
     );
-  }
-
-  void _showAudioRoutingDialog(int index) {
-    Get.dialog(
-      AlertDialog(
-        title: const Text('Audio Routing (Bus)'),
-        content: SizedBox(
-          width: 400,
-          child: Obx(() {
-            final devices = controller.audioService.outputDevices;
-            final pad = controller.pads[index];
-            final currentDeviceId = pad.deviceId;
-            final currentChannels = pad.outputChannels ?? [];
-
-            // Get channel count for selected device (or global default)
-            final channelCount = controller.audioService.getDeviceChannels(
-              currentDeviceId,
-            );
-
-            return SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '1. Select Output Device',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  ListTile(
-                    title: const Text('Global Default'),
-                    subtitle: const Text(
-                      'Use the system/global selected device',
-                    ),
-                    trailing: currentDeviceId == null
-                        ? const Icon(Icons.check_circle, color: Colors.green)
-                        : null,
-                    onTap: () {
-                      controller.assignDeviceIdToPad(index, null);
-                    },
-                  ),
-                  const Divider(),
-                  ...devices.map((device) {
-                    final isSelected = currentDeviceId == device.id;
-                    return ListTile(
-                      title: Text(device.name),
-                      trailing: isSelected
-                          ? const Icon(Icons.check_circle, color: Colors.green)
-                          : null,
-                      onTap: () {
-                        controller.assignDeviceIdToPad(index, device.id);
-                      },
-                    );
-                  }),
-                  const SizedBox(height: 24),
-                  const Text(
-                    '2. Channel Mapping',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  if (channelCount <= 0)
-                    const Text('No channels available for this device.')
-                  else ...[
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: List.generate(channelCount, (i) {
-                        final isSelected = currentChannels.contains(i);
-                        return FilterChip(
-                          label: Text('Ch ${i + 1}'),
-                          selected: isSelected,
-                          onSelected: (selected) {
-                            final newList = List<int>.from(currentChannels);
-                            if (selected) {
-                              newList.add(i);
-                            } else {
-                              newList.remove(i);
-                            }
-                            newList.sort();
-                            controller.assignOutputChannelsToPad(
-                              index,
-                              newList.isEmpty ? null : newList,
-                            );
-                          },
-                        );
-                      }),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        TextButton(
-                          onPressed: () {
-                            controller.assignOutputChannelsToPad(index, [0, 1]);
-                          },
-                          child: const Text('Stereo (1+2)'),
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            controller.assignOutputChannelsToPad(index, null);
-                          },
-                          child: const Text('Reset to Default'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-            );
-          }),
-        ),
-        actions: [TextButton(onPressed: Get.back, child: const Text('Done'))],
-      ),
-    );
-  }
-
-  void _showFilterDialog(int index) {
-    Get.dialog(
-      AlertDialog(
-        title: const Text('Filters & DSP'),
-        content: SizedBox(
-          width: 350,
-          child: Obx(() {
-            final pad = controller.pads[index];
-            final currentType = pad.filterType;
-            final currentFreq = pad.filterFrequency;
-
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Filter Type',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  children: ['none', 'lowpass', 'highpass'].map((type) {
-                    return ChoiceChip(
-                      label: Text(type.toUpperCase()),
-                      selected: currentType == type,
-                      onSelected: (val) {
-                        if (val) {
-                          controller.updateFilterForPad(
-                            index,
-                            type,
-                            currentFreq,
-                          );
-                        }
-                      },
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 24),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Cutoff Frequency',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    Text(
-                      '${currentFreq.toInt()} Hz',
-                      style: const TextStyle(fontFamily: 'Courier'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Slider(
-                  value: currentFreq,
-                  min: 20.0,
-                  max: 20000.0,
-                  divisions: 100,
-                  label: '${currentFreq.toInt()} Hz',
-                  onChanged: currentType == 'none'
-                      ? null
-                      : (val) {
-                          controller.updateFilterForPad(
-                            index,
-                            currentType,
-                            val,
-                          );
-                        },
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Adjust cutoff to perform frequency sweeps.',
-                  style: TextStyle(fontSize: 11, color: Colors.white54),
-                ),
-              ],
-            );
-          }),
-        ),
-        actions: [TextButton(onPressed: Get.back, child: const Text('Done'))],
-      ),
-    );
+    if (ok) controller.clearPad(index);
   }
 
   Material _pad(
@@ -1460,12 +875,19 @@ class HomeView extends GetView<HomeController> {
     final isPlaying = hasFile && controller.audioService.isPlaying(pad.path!);
     final isPaused = hasFile && controller.audioService.isPaused(pad.path!);
 
-    // Blend base color towards white when playing for a clear visual change.
-    final baseColor = color.withValues(alpha: hasFile ? 1 : 0.4);
-    final playingColor = const Color.fromARGB(255, 3, 165, 0); // Light Blue 300
-    final bgColor = isPlaying
-        ? playingColor.withValues(alpha: 0.95)
-        : baseColor;
+    // Every pad keeps its palette color: assigned pads are vivid with white
+    // text, empty pads are a soft tint of the same color so the grid stays
+    // colorful and the two states are still easy to tell apart.
+    final scheme = Theme.of(context).colorScheme;
+    final accent = HSLColor.fromColor(
+      color,
+    ).withSaturation(0.72).withLightness(0.46).toColor();
+    final bgColor = !hasFile
+        ? Color.alphaBlend(accent.withValues(alpha: 0.5), scheme.surface)
+        : (isPlaying ? const Color(0xFF1E9E48) : accent);
+    final fg = hasFile ? Colors.white : scheme.onSurface;
+    final fgMuted = hasFile ? Colors.white70 : scheme.onSurfaceVariant;
+    final iconColor = hasFile ? Colors.white : accent;
 
     // --- Waveform Data ---
     final waveform = hasFile
@@ -1474,9 +896,14 @@ class HomeView extends GetView<HomeController> {
 
     return Material(
       color: bgColor,
-      borderRadius: BorderRadius.circular(16),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: hasFile
+            ? BorderSide.none
+            : BorderSide(color: scheme.outlineVariant),
+      ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         onTap: () {
           controller.focusNode.requestFocus();
           if (hasFile) controller.playPad(index);
@@ -1489,600 +916,312 @@ class HomeView extends GetView<HomeController> {
           controller.focusNode.requestFocus();
           _showPadOptions(context, index, details.globalPosition);
         },
-        child: Stack(
-          children: [
-            // Waveform Background
-            if (hasFile && waveform != null)
-              Positioned.fill(
-                child: StreamBuilder<String>(
-                  stream: controller.audioService.waveformUpdates,
-                  builder: (context, snapshot) {
-                    final currentWave = controller.audioService.getWaveform(
-                      pad.path!,
-                    );
-                    if (currentWave == null) return const SizedBox();
+        child: LayoutBuilder(
+          builder: (context, box) {
+            // Small tiles (narrow windows / many columns) drop secondary chrome.
+            final small = box.maxWidth < 200 || box.maxHeight < 150;
+            return Stack(
+              children: [
+                // Waveform Background
+                if (hasFile && waveform != null)
+                  Positioned.fill(
+                    child: StreamBuilder<String>(
+                      stream: controller.audioService.waveformUpdates,
+                      builder: (context, snapshot) {
+                        final currentWave = controller.audioService.getWaveform(
+                          pad.path!,
+                        );
+                        if (currentWave == null) return const SizedBox();
 
-                    return ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: CustomPaint(
-                        painter: WaveformPainter(
-                          data: currentWave,
-                          color: Colors.white.withValues(alpha: 0.2),
-                          progress: 0.0,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-
-            // Top-Left: Pad Name and Keyboard Shortcut
-            Positioned(
-              top: 12,
-              left: 12,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Obx(() {
-                    if (controller.editingPadIndex.value == index) {
-                      return SizedBox(
-                        width: 120,
-                        height: 30,
-                        child: TextField(
-                          controller: controller.renamePadInputController,
-                          autofocus: true,
-                          style: const TextStyle(
-                            color: Colors.black,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                          decoration: InputDecoration(
-                            filled: true,
-                            fillColor: Colors.white,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 0,
-                            ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(4),
-                              borderSide: BorderSide.none,
-                            ),
-                          ),
-                          onSubmitted: (val) {
-                            if (val.trim().isNotEmpty) {
-                              controller.savePadName(index, val.trim());
-                            } else {
-                              controller.cancelRenamingPad();
-                            }
-                          },
-                          onTapOutside: (_) => controller.cancelRenamingPad(),
-                        ),
-                      );
-                    } else {
-                      return GestureDetector(
-                        onTap: () => controller.startRenamingPad(index),
-                        child: Text(
-                          pad.name,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                      );
-                    }
-                  }),
-                  if (controller.pads[index].keyboardShortcut != null ||
-                      controller.pads[index].deviceId != null ||
-                      controller.pads[index].faderId != null ||
-                      controller.pads[index].isBackground) ...[
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        if (controller.pads[index].keyboardShortcut != null)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            margin: const EdgeInsets.only(right: 4),
-                            decoration: BoxDecoration(
+                        return ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: CustomPaint(
+                            painter: WaveformPainter(
+                              data: currentWave,
                               color: Colors.white.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              controller.pads[index].keyboardShortcut!,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
+                              progress: 0.0,
                             ),
                           ),
-                        if (controller.pads[index].faderId != null)
-                          Tooltip(
-                            message: 'Linked to Mixer Fader',
-                            child: Padding(
-                              padding: const EdgeInsets.only(right: 4),
-                              child: Icon(
-                                Icons.linear_scale,
-                                size: 14,
-                                color: Colors.white.withValues(alpha: 0.8),
-                              ),
-                            ),
-                          ),
-                        if (controller.pads[index].isBackground)
-                          Tooltip(
-                            message: 'Background Pad (API Excluded)',
-                            child: Padding(
-                              padding: const EdgeInsets.only(right: 4),
-                              child: Icon(
-                                Icons.visibility_off,
-                                size: 14,
-                                color: Colors.white.withValues(alpha: 0.5),
-                              ),
-                            ),
-                          ),
-                        if (controller.pads[index].deviceId != null)
-                          Tooltip(
-                            message: 'Routed to specific output',
-                            child: Icon(
-                              Icons.router,
-                              size: 14,
-                              color: Colors.white.withValues(alpha: 0.6),
-                            ),
-                          ),
-                      ],
+                        );
+                      },
                     ),
-                  ],
-                ],
-              ),
-            ),
-            // Center: Icon (Play/Pause) or Loading Indicator
-            Center(
-              child: pad.isLoading
-                  ? const SizedBox(
-                      width: 48,
-                      height: 48,
-                      child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 3,
-                      ),
-                    )
-                  : Icon(
-                      !hasFile
-                          ? Icons.add
-                          : (isPlaying && !isPaused
-                                ? Icons.pause
-                                : Icons.play_arrow),
-                      color: Colors.white.withValues(alpha: 0.8),
-                      size: 48,
-                    ),
-            ),
-            // Bottom: Controls & Info
-            Positioned(
-              bottom: 8,
-              left: 12,
-              right: 12,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    fileName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white70, fontSize: 13),
                   ),
-                  if (hasFile)
-                    _PadProgressWidget(
-                      path: pad.path!,
-                      controller: controller,
-                      index: index,
-                    )
-                  else
-                    const Padding(
-                      padding: EdgeInsets.only(top: 8),
-                      child: Text(
-                        'Long-press to assign',
-                        style: TextStyle(color: Colors.white54, fontSize: 11),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            // Top-Right: Controls (Loop & Delete)
-            if (hasFile)
-              Positioned(
-                top: 4,
-                right: 4,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Keyboard Shortcut Icon
-                    Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(20),
-                        onTap: () => _showKeyboardShortcutDialog(index),
-                        child: Padding(
-                          padding: const EdgeInsets.all(8),
-                          child: Icon(
-                            Icons.keyboard,
-                            size: 20,
-                            color:
-                                controller.pads[index].keyboardShortcut != null
-                                ? Colors.white
-                                : Colors.white.withValues(alpha: 0.4),
-                          ),
-                        ),
-                      ),
-                    ),
-                    // Loop Icon
-                    Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(20),
-                        onTap: () => controller.toggleLoop(index),
-                        child: Padding(
-                          padding: const EdgeInsets.all(8),
-                          child: Icon(
-                            Icons.loop,
-                            size: 20,
-                            color: controller.pads[index].isLooping
-                                ? Colors.white
-                                : Colors.white.withValues(alpha: 0.4),
-                          ),
-                        ),
-                      ),
-                    ),
-                    // Delete Icon
-                    Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(20),
-                        onTap: () {
-                          Get.dialog(
-                            AlertDialog(
-                              title: const Text('Clear Pad'),
-                              content: const Text(
-                                'Are you sure you want to remove the audio from this pad?',
+
+                // Top-Left: Pad Name and Keyboard Shortcut
+                Positioned(
+                  top: 12,
+                  left: 12,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Obx(() {
+                        if (controller.editingPadIndex.value == index) {
+                          return SizedBox(
+                            width: 120,
+                            height: 30,
+                            child: TextField(
+                              controller: controller.renamePadInputController,
+                              autofocus: true,
+                              style: const TextStyle(
+                                color: Colors.black,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
                               ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Get.back(),
-                                  child: const Text('Cancel'),
+                              decoration: InputDecoration(
+                                filled: true,
+                                fillColor: Colors.white,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 0,
                                 ),
-                                TextButton(
-                                  onPressed: () {
-                                    controller.clearPad(index);
-                                    Get.back();
-                                  },
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: Colors.red,
-                                  ),
-                                  child: const Text('Delete'),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(4),
+                                  borderSide: BorderSide.none,
                                 ),
-                              ],
+                              ),
+                              onSubmitted: (val) {
+                                if (val.trim().isNotEmpty) {
+                                  controller.savePadName(index, val.trim());
+                                } else {
+                                  controller.cancelRenamingPad();
+                                }
+                              },
+                              onTapOutside: (_) =>
+                                  controller.cancelRenamingPad(),
                             ),
                           );
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.all(8),
-                          child: Icon(
-                            Icons.delete_outline,
-                            size: 20,
-                            color: Colors.white.withValues(alpha: 0.6),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showSettingsDialog(BuildContext context) {
-    final urlCtrl = TextEditingController(text: controller.remoteEndpointUrl);
-    final localIp = controller.localApiService.localIp.value;
-    final apiEndpoint = 'http://$localIp:9696/api/v1/state';
-
-    Get.dialog(
-      AlertDialog(
-        title: const Text('Settings'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Local API Server',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            _buildInfoTile('Local IP:', localIp),
-            _buildInfoTile('Endpoint:', apiEndpoint, isCopyable: true),
-            const SizedBox(height: 16),
-            const Divider(),
-            const SizedBox(height: 16),
-            const Text(
-              'Remote Webhook URL (POST)',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: urlCtrl,
-              decoration: const InputDecoration(
-                hintText: 'http://example.com/webhook',
-                border: OutlineInputBorder(),
-                helperText: 'App will POST state here every 1s',
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Divider(),
-            const SizedBox(height: 16),
-            const Text(
-              'Appearance',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Obx(
-              () => SegmentedButton<ThemeMode>(
-                segments: const [
-                  ButtonSegment(
-                    value: ThemeMode.system,
-                    label: Text('System'),
-                    icon: Icon(Icons.brightness_auto),
-                  ),
-                  ButtonSegment(
-                    value: ThemeMode.light,
-                    label: Text('Light'),
-                    icon: Icon(Icons.light_mode),
-                  ),
-                  ButtonSegment(
-                    value: ThemeMode.dark,
-                    label: Text('Dark'),
-                    icon: Icon(Icons.dark_mode),
-                  ),
-                ],
-                selected: {controller.themeMode.value},
-                onSelectionChanged: (Set<ThemeMode> newSelection) {
-                  controller.setThemeMode(newSelection.first);
-                },
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Divider(),
-            const SizedBox(height: 16),
-            const Text(
-              'Sidecar Diagnostics',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Obx(
-              () => _buildInfoTile(
-                'Status:',
-                controller.sidecarService.sidecarStatus.value,
-              ),
-            ),
-            _buildInfoTile(
-              'Port:',
-              controller.sidecarService.lastDiscoveredPort.toString(),
-            ),
-            Obx(
-              () => _buildInfoTile(
-                'WS:',
-                controller.sidecarService.wsConnectionStatus.value,
-              ),
-            ),
-            Obx(() {
-              final err = controller.sidecarService.lastError.value;
-              return err.isNotEmpty
-                  ? _buildInfoTile('Last Error:', err)
-                  : const SizedBox.shrink();
-            }),
-            _buildInfoTile(
-              'Logs:',
-              controller.sidecarService.logFilePath,
-              isCopyable: true,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: Get.back, child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () {
-              controller.updateRemoteEndpoint(urlCtrl.text.trim());
-              Get.back();
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInfoTile(String label, String value, {bool isCopyable = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              value,
-              style: const TextStyle(fontFamily: 'Courier', fontSize: 12),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (isCopyable)
-            IconButton(
-              icon: const Icon(Icons.copy, size: 16),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: value));
-                if (Get.context != null) {
-                  ScaffoldMessenger.of(Get.context!).showSnackBar(
-                    const SnackBar(
-                      content: Text('Endpoint copied to clipboard'),
-                      duration: Duration(seconds: 1),
-                      behavior: SnackBarBehavior.floating,
-                      width: 300,
-                    ),
-                  );
-                }
-              },
-            ),
-        ],
-      ),
-    );
-  }
-
-  void _showAddFaderDialog(BuildContext context) {
-    final textCtrl = TextEditingController();
-    Get.dialog(
-      AlertDialog(
-        title: const Text('Add Fader'),
-        content: TextField(
-          controller: textCtrl,
-          decoration: const InputDecoration(hintText: 'Fader Name'),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(onPressed: Get.back, child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              if (textCtrl.text.isNotEmpty) {
-                controller.addFader(textCtrl.text);
-                Get.back();
-              }
-            },
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showFaderSettings(BuildContext context, int index) {
-    final fader = controller.faders[index];
-    StreamSubscription? sub;
-
-    Get.dialog(
-      AlertDialog(
-        title: Text('Fader: ${fader.name}'),
-        content: SizedBox(
-          width: 400,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Assign MIDI CC to this fader:',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 12),
-                Obx(() {
-                  final currentCc = controller.faders[index].midiCc;
-                  return Column(
-                    children: [
-                      Text(
-                        currentCc != null
-                            ? 'Assigned: ${MidiNoteEvent.getDisplayNameForId(currentCc)}'
-                            : 'No CC assigned',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      if (currentCc != null) ...[
-                        const SizedBox(height: 8),
-                        TextButton(
-                          onPressed: () =>
-                              controller.assignFaderMidiCc(index, null),
-                          child: const Text('Remove Assignment'),
+                        } else {
+                          return GestureDetector(
+                            onTap: () => controller.startRenamingPad(index),
+                            child: Text(
+                              pad.name,
+                              style: TextStyle(
+                                color: fg,
+                                fontWeight: FontWeight.w700,
+                                fontSize: small ? 14 : 16,
+                              ),
+                            ),
+                          );
+                        }
+                      }),
+                      if (controller.pads[index].keyboardShortcut != null ||
+                          controller.pads[index].deviceId != null ||
+                          controller.pads[index].faderId != null ||
+                          controller.pads[index].isBackground) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            if (controller.pads[index].keyboardShortcut != null)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                margin: const EdgeInsets.only(right: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  controller.pads[index].keyboardShortcut!,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            if (controller.pads[index].faderId != null)
+                              Tooltip(
+                                message: 'Linked to Mixer Fader',
+                                child: Padding(
+                                  padding: const EdgeInsets.only(right: 4),
+                                  child: Icon(
+                                    Icons.linear_scale,
+                                    size: 14,
+                                    color: Colors.white.withValues(alpha: 0.8),
+                                  ),
+                                ),
+                              ),
+                            if (controller.pads[index].isBackground)
+                              Tooltip(
+                                message: 'Background Pad (API Excluded)',
+                                child: Padding(
+                                  padding: const EdgeInsets.only(right: 4),
+                                  child: Icon(
+                                    Icons.visibility_off,
+                                    size: 14,
+                                    color: Colors.white.withValues(alpha: 0.5),
+                                  ),
+                                ),
+                              ),
+                            if (controller.pads[index].deviceId != null)
+                              Tooltip(
+                                message: 'Routed to specific output',
+                                child: Icon(
+                                  Icons.router,
+                                  size: 14,
+                                  color: Colors.white.withValues(alpha: 0.6),
+                                ),
+                              ),
+                          ],
                         ),
                       ],
                     ],
-                  );
-                }),
-                const SizedBox(height: 8),
-                const Center(
-                  child: Text(
-                    'Move a hardware fader to assign...',
-                    style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic),
                   ),
                 ),
-                const Divider(height: 32),
-                const Text(
-                  'Manage Linked Pads:',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 12),
-                Obx(() {
-                  final pads = controller.pads;
-                  return Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: List.generate(pads.length, (pIdx) {
-                      final p = pads[pIdx];
-                      final isLinked = p.faderId == fader.id;
-                      return ChoiceChip(
-                        label: Text(
-                          p.name,
-                          style: const TextStyle(fontSize: 10),
+                // Center: Icon (Play/Pause) or Loading Indicator
+                Center(
+                  child: pad.isLoading
+                      ? const SizedBox(
+                          width: 48,
+                          height: 48,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 3,
+                          ),
+                        )
+                      : Icon(
+                          !hasFile
+                              ? Icons.add
+                              : (isPlaying && !isPaused
+                                    ? Icons.pause
+                                    : Icons.play_arrow),
+                          color: iconColor.withValues(
+                            alpha: hasFile ? 0.85 : 0.9,
+                          ),
+                          size: small ? 30 : 44,
                         ),
-                        selected: isLinked,
-                        onSelected: (val) {
-                          controller.assignPadToFader(
-                            pIdx,
-                            val ? fader.id : null,
-                          );
-                        },
-                      );
-                    }),
-                  );
-                }),
+                ),
+                // Bottom: Controls & Info
+                Positioned(
+                  bottom: 8,
+                  left: 12,
+                  right: 12,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        fileName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: fgMuted, fontSize: 13),
+                      ),
+                      if (hasFile)
+                        _PadProgressWidget(
+                          path: pad.path!,
+                          controller: controller,
+                          index: index,
+                          compact: small,
+                        )
+                      else if (!small)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            'Long-press to assign',
+                            style: TextStyle(
+                              color: fgMuted.withValues(alpha: 0.7),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                // Top-Right: Controls (Loop & Delete)
+                if (hasFile)
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Keyboard Shortcut Icon (hidden on small tiles)
+                        if (!small)
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(20),
+                              onTap: () => PadSettingsDialog.show(
+                                controller,
+                                index,
+                                tab: PadSettingsTab.triggers,
+                              ),
+                              child: Padding(
+                                padding: EdgeInsets.all(small ? 5 : 8),
+                                child: Icon(
+                                  Icons.keyboard,
+                                  size: small ? 18 : 20,
+                                  color:
+                                      controller.pads[index].keyboardShortcut !=
+                                          null
+                                      ? Colors.white
+                                      : Colors.white.withValues(alpha: 0.4),
+                                ),
+                              ),
+                            ),
+                          ),
+                        // Loop Icon
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(20),
+                            onTap: () => controller.toggleLoop(index),
+                            child: Padding(
+                              padding: EdgeInsets.all(small ? 5 : 8),
+                              child: Icon(
+                                Icons.loop,
+                                size: small ? 18 : 20,
+                                color: controller.pads[index].isLooping
+                                    ? Colors.white
+                                    : Colors.white.withValues(alpha: 0.4),
+                              ),
+                            ),
+                          ),
+                        ),
+                        // Delete Icon
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(20),
+                            onTap: () {
+                              _confirmClearPad(index);
+                            },
+                            child: Padding(
+                              padding: EdgeInsets.all(small ? 5 : 8),
+                              child: Icon(
+                                Icons.delete_outline,
+                                size: small ? 18 : 20,
+                                color: Colors.white.withValues(alpha: 0.6),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
-            ),
-          ),
+            );
+          },
         ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              sub?.cancel();
-              Get.back();
-            },
-            child: const Text('Close'),
-          ),
-          TextButton(
-            onPressed: () {
-              sub?.cancel();
-              controller.removeFader(index);
-              Get.back();
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Delete Fader'),
-          ),
-        ],
       ),
-    ).then((_) => sub?.cancel());
-
-    sub = controller.midiService.noteStream.listen((event) {
-      if (event.type == MidiEventType.controlChange) {
-        controller.assignFaderMidiCc(index, event.triggerId);
-        sub?.cancel();
-        if (Get.isDialogOpen ?? false) Get.back();
-      }
-    });
+    );
   }
+
+  Future<void> _showAddFaderDialog(BuildContext context) async {
+    final name = await promptDialog(
+      title: 'New fader',
+      label: 'Fader name',
+      confirmLabel: 'Create',
+      icon: Icons.linear_scale,
+    );
+    if (name != null) controller.addFader(name);
+  }
+
+  void _showFaderSettings(BuildContext context, int index) =>
+      FaderDialog.show(controller, index);
 }
 
 class _MixerPanel extends StatelessWidget {
@@ -2550,10 +1689,15 @@ class _PadProgressWidget extends StatefulWidget {
   final HomeController controller;
   final int index;
 
+  /// Small tiles show only the time and seek bar; the skip/restart buttons
+  /// would not fit.
+  final bool compact;
+
   const _PadProgressWidget({
     required this.path,
     required this.controller,
     required this.index,
+    this.compact = false,
   });
 
   @override
@@ -2631,8 +1775,7 @@ class _PadProgressWidgetState extends State<_PadProgressWidget> {
           child: SliderTheme(
             data: SliderTheme.of(Get.context!).copyWith(
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-              overlayShape:
-                  const RoundSliderOverlayShape(overlayRadius: 10),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
               trackHeight: 2,
               activeTrackColor: Colors.white,
               inactiveTrackColor: Colors.white24,
@@ -2645,46 +1788,54 @@ class _PadProgressWidgetState extends State<_PadProgressWidget> {
             ),
           ),
         ),
-        const SizedBox(height: 4),
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              IconButton(
-                icon: const Icon(Icons.replay, color: Colors.white, size: 20),
-                onPressed: () => controller.restartPad(index),
-                tooltip: 'Restart',
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-              IconButton(
-                icon:
-                    const Icon(Icons.replay_5, color: Colors.white, size: 20),
-                onPressed: () => controller.skipBackward(index),
-                tooltip: '-5s',
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-              IconButton(
-                icon:
-                    const Icon(Icons.forward_5, color: Colors.white, size: 20),
-                onPressed: () => controller.skipForward(index),
-                tooltip: '+5s',
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-              if (_isActive)
+        if (!widget.compact) ...[
+          const SizedBox(height: 4),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
                 IconButton(
-                  icon: const Icon(Icons.stop, color: Colors.white, size: 20),
-                  onPressed: () => controller.stopPad(index),
-                  tooltip: 'Stop',
+                  icon: const Icon(Icons.replay, color: Colors.white, size: 20),
+                  onPressed: () => controller.restartPad(index),
+                  tooltip: 'Restart',
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(),
                 ),
-            ],
+                IconButton(
+                  icon: const Icon(
+                    Icons.replay_5,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  onPressed: () => controller.skipBackward(index),
+                  tooltip: '-5s',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+                IconButton(
+                  icon: const Icon(
+                    Icons.forward_5,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  onPressed: () => controller.skipForward(index),
+                  tooltip: '+5s',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+                if (_isActive)
+                  IconButton(
+                    icon: const Icon(Icons.stop, color: Colors.white, size: 20),
+                    onPressed: () => controller.stopPad(index),
+                    tooltip: 'Stop',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+              ],
+            ),
           ),
-        ),
+        ],
       ],
     );
   }
