@@ -17,7 +17,8 @@ import 'package:web_socket_channel/status.dart' as status;
 ///   backoff. If the process dies, it is restarted with backoff (max 5 tries).
 class SidecarService extends GetxService {
   static const _maxRestarts = 5;
-  static const _maxReconnectsBeforeRestart = 20;
+  static const _maxReconnectsBeforeRestart =
+      4; // ~30s unresponsive, then restart the engine
 
   final sidecarStatus = 'Not Started'.obs;
   final wsConnectionStatus = 'Disconnected'.obs;
@@ -200,22 +201,21 @@ class SidecarService extends GetxService {
 
       proc.exitCode.then((code) => _onSidecarExit(proc, code));
 
-      proc.stdout
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .listen((line) async {
-            AppLog.log('sidecar-out', line);
-            // The sidecar prints exactly this at the start of a line once it listens.
-            if (line.startsWith('PORT_BIND_SUCCESS:')) {
-              final port = int.tryParse(line.split(':').last.trim());
-              if (port != null) {
-                _discoveredPort = port;
-                await _log('Detected sidecar port: $_discoveredPort');
-                _reconnectAttempt = 0;
-                _connectToWebSocket();
-              }
-            }
-          });
+      proc.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen((
+        line,
+      ) async {
+        AppLog.log('sidecar-out', line);
+        // The sidecar prints exactly this at the start of a line once it listens.
+        if (line.startsWith('PORT_BIND_SUCCESS:')) {
+          final port = int.tryParse(line.split(':').last.trim());
+          if (port != null) {
+            _discoveredPort = port;
+            await _log('Detected sidecar port: $_discoveredPort');
+            _reconnectAttempt = 0;
+            _connectToWebSocket();
+          }
+        }
+      });
 
       proc.stderr.transform(utf8.decoder).listen((data) async {
         AppLog.log('sidecar-err', data.trimRight());
@@ -257,8 +257,7 @@ class SidecarService extends GetxService {
     }
     sidecarStatus.value = code == 0 ? 'Stopped' : 'Error';
     if (code != 0) {
-      final msg =
-          'Sidecar crashed (Code $code). Check logs at: ${AppLog.path}';
+      final msg = 'Sidecar crashed (Code $code). Check logs at: ${AppLog.path}';
       lastError.value = 'Crashed with code $code. Check log file.';
       initStatusText.value = msg;
       await _log('FATAL ERROR: $msg');
@@ -282,14 +281,27 @@ class SidecarService extends GetxService {
     _restartTimer = Timer(delay, _startPythonSidecar);
   }
 
+  /// Stops the sidecar process, forcing it if it ignores the polite request: a
+  /// deadlocked sidecar cannot run its own SIGTERM handler.
+  void _killSidecar() {
+    final proc = _pythonProcess;
+    if (proc == null) return;
+    proc.kill();
+    Future.delayed(const Duration(seconds: 3), () {
+      if (identical(_pythonProcess, proc)) {
+        _log('Sidecar ignored SIGTERM; sending SIGKILL');
+        proc.kill(ProcessSignal.sigkill);
+      }
+    });
+  }
+
   /// Restarts the sidecar on demand (e.g. from Settings > Diagnostics).
   void restartSidecar() {
     _log('Manual sidecar restart requested');
     _restartCount = 0;
     _restartTimer?.cancel();
-    final proc = _pythonProcess;
-    if (proc != null) {
-      proc.kill(); // the exit handler starts a fresh one
+    if (_pythonProcess != null) {
+      _killSidecar(); // the exit handler starts a fresh one
     } else {
       _startPythonSidecar();
     }
@@ -377,7 +389,7 @@ class SidecarService extends GetxService {
       _log(
         'Sidecar unresponsive after $_reconnectAttempt reconnects; restarting it',
       );
-      _pythonProcess?.kill();
+      _killSidecar();
       return;
     }
     final delay = Duration(
@@ -424,7 +436,9 @@ class SidecarService extends GetxService {
     if (_noisyOut.contains(command)) {
       _count('out:$command');
     } else {
-      _log('-> ${message.length > 300 ? '${message.substring(0, 300)}…' : message}');
+      _log(
+        '-> ${message.length > 300 ? '${message.substring(0, 300)}…' : message}',
+      );
     }
     try {
       _channel!.sink.add(message);
@@ -439,7 +453,13 @@ class SidecarService extends GetxService {
   /// The interesting fields of a message, without bulky payloads.
   String _detail(Map data) {
     final parts = <String>[
-      for (final k in ['stream_id', 'message', 'file_path', 'duration_seconds', 'device_id'])
+      for (final k in [
+        'stream_id',
+        'message',
+        'file_path',
+        'duration_seconds',
+        'device_id',
+      ])
         if (data.containsKey(k)) '$k=${data[k]}',
       for (final k in ['devices', 'data'])
         if (data[k] is List) '$k[${(data[k] as List).length}]',

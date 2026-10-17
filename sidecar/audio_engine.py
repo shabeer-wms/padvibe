@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 import os
 import threading
@@ -133,7 +134,11 @@ class AudioEngine:
         self.cache = AudioCache()
         # PortAudio must not be re-initialised while another thread opens a stream
         # or queries devices (that can crash natively), so those are serialised.
+        # Only worker threads take this lock, never the asyncio event loop: the
+        # native calls it guards (open, abort, close) can block for a long time.
         self._pa_lock = threading.RLock()
+        # Streams that finished on their own are torn down here, off the event loop.
+        self._closer = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="audio-closer")
         # Set by the server; called (from any thread) when device indices changed.
         self.on_devices_changed = None
 
@@ -191,17 +196,21 @@ class AudioEngine:
     def _output_channels_for(self, device_id):
         """Returns (device_id, channel count) for a device, resolving the default."""
         with self.lock:
-            if device_id is not None and device_id in self.device_cache:
-                return device_id, self.device_cache[device_id]['channels']
-            try:
-                target = device_id if device_id is not None else sd.default.device[1]
-                if target in self.device_cache:
-                    return target, self.device_cache[target]['channels']
-                channels = sd.query_devices(target, 'output')['max_output_channels']
+            known = self.device_cache.get(device_id)
+        if known is not None:
+            return device_id, known['channels']
+        try:  # a native call: never made while holding self.lock
+            target = device_id if device_id is not None else sd.default.device[1]
+            with self.lock:
+                known = self.device_cache.get(target)
+            if known is not None:
+                return target, known['channels']
+            channels = sd.query_devices(target, 'output')['max_output_channels']
+            with self.lock:
                 self.device_cache[target] = {"channels": channels}
-                return target, channels
-            except Exception:
-                return device_id, 2
+            return target, channels
+        except Exception:
+            return device_id, 2
 
     # ── Playback ───────────────────────────────────────────────────────────
 
@@ -299,7 +308,12 @@ class AudioEngine:
                 log.warning("Stream %s audio status: %s (occurrences so far: %d)", stream_id, status, s.underflows)
 
         outdata.fill(0)
-        if s.finished or s.closed:
+        if s.closed:
+            # The engine is tearing this stream down (abort() from another thread).
+            # Stay quiet and do NOT stop it from here: PortAudio can deadlock when the
+            # callback ends a stream at the same moment another thread stops it.
+            return
+        if s.finished:
             s.notify_finished(stream_id)
             raise sd.CallbackStop
 
@@ -434,26 +448,33 @@ class AudioEngine:
 
     def stop(self, stream_id):
         with self.lock:
-            if stream_id in self.streams:
-                log.info("Stopping stream %s", stream_id)
-                self._cleanup_stream_locked(stream_id, self.streams[stream_id])
-            else:
-                log.debug("Stop requested for unknown stream %s", stream_id)
+            s = self.streams.get(stream_id)
+            if s is not None:
+                self._detach_locked(stream_id, s)
+        if s is None:
+            log.debug("Stop requested for unknown stream %s", stream_id)
+            return
+        log.info("Stopping stream %s", stream_id)
+        self._teardown(stream_id, s)
 
     def stop_all(self):
         with self.lock:
-            ids = list(self.streams.keys())
-            log.info("Stopping all streams: %s", ids)
-            for sid in ids:
-                self.stop(sid)
+            detached = [(sid, self._detach_locked(sid, s)) for sid, s in list(self.streams.items())]
+        log.info("Stopping all streams: %s", [sid for sid, _ in detached])
+        for sid, s in detached:
+            self._teardown(sid, s)
 
     def unload(self, file_path):
         """Forgets a file (its pad was cleared or removed): stops anything still
         playing it and frees its decoded audio."""
         with self.lock:
-            for sid in [sid for sid, s in self.streams.items() if s.path == file_path]:
-                log.info("Stopping stream %s: its file was unloaded", sid)
-                self._cleanup_stream_locked(sid, self.streams[sid])
+            detached = [
+                (sid, self._detach_locked(sid, s))
+                for sid, s in list(self.streams.items()) if s.path == file_path
+            ]
+        for sid, s in detached:
+            log.info("Stopping stream %s: its file was unloaded", sid)
+            self._teardown(sid, s)
         freed = self.cache.evict(file_path)
         log.info("Unloaded %s (was cached: %s; cache now %d files, %.1fMB)",
                  os.path.basename(file_path), freed, len(self.cache), self.cache.total_bytes / 1e6)
@@ -505,10 +526,12 @@ class AudioEngine:
             s.finished = False
 
     def get_levels(self):
-        """Returns aggregated master levels (rms_l, rms_r, peak_l, peak_r, spectrum)."""
-        with self.lock:
-            self._prune_finished_streams_locked()
-            active_ids = set(self.streams.keys())
+        """Returns aggregated master levels (rms_l, rms_r, peak_l, peak_r, spectrum).
+
+        Runs on the asyncio event loop 20 times a second, so it must never wait
+        on a native audio call: finished streams are handed to the closer thread."""
+        self._prune_finished_streams()
+        active_ids = set(list(self.streams.keys()))
 
         rms_l_pow = rms_r_pow = peak_l = peak_r = 0.0
         for sid in list(self.stream_levels):
@@ -533,38 +556,57 @@ class AudioEngine:
         return (f"streams={len(self.streams)} cached_files={len(self.cache)} "
                 f"cache={self.cache.total_bytes / 1e6:.0f}MB")
 
-    def _cleanup_stream_locked(self, stream_id, s):
-        # Tell the audio callback first, so it never reads a closed file.
+    def _detach_locked(self, stream_id, s):
+        """Takes a stream out of the engine's tables. Fast; safe under self.lock.
+        The slow native teardown happens afterwards, in _teardown."""
         s.closed = True
         s.finished = True
-        steps = [("stop", s.stream.stop), ("close", s.stream.close)]
+        self.stream_levels.pop(stream_id, None)
+        self.streams.pop(stream_id, None)
+        return s
+
+    def _teardown(self, stream_id, s):
+        """Stops and closes a detached stream. These native calls can block, so
+        this must never run under self.lock or on the event loop.
+
+        abort() rather than stop(): stop() waits for queued audio to play out,
+        which on some devices (virtual or multi-channel ones) can block for many
+        seconds and, with several pads starting and stopping at once, hang."""
+        steps = [("abort", s.stream.abort), ("close", s.stream.close)]
         if s.file is not None:
             steps.append(("file close", s.file.close))
-        for step, fn in steps:
-            try:
-                fn()
-            except Exception as e:
-                log.warning("Stream %s %s failed: %r", stream_id, step, e)
-        log.info("Stream %s cleaned up (%s)", stream_id, os.path.basename(s.path))
+        t0 = time.monotonic()
+        with self._pa_lock:
+            for step, fn in steps:
+                try:
+                    fn()
+                except Exception as e:
+                    log.warning("Stream %s %s failed: %r", stream_id, step, e)
+        took = (time.monotonic() - t0) * 1000
+        log.info("Stream %s cleaned up (%s) in %.0fms", stream_id, os.path.basename(s.path), took)
+        if took > 1000:
+            log.warning("Stream %s teardown was slow (%.0fms); the audio device is struggling", stream_id, took)
 
-        # Fire on_finished if the stream was pruned before the callback could do it.
-        # This ensures Flutter always receives audio_finished and clears the active stream.
+        # Always tell the app, even if the callback never got to: otherwise its
+        # pad would stay stuck in the playing state.
         try:
             s.notify_finished(stream_id)
         except Exception:
             log.exception("on_finished callback failed during cleanup of stream %s", stream_id)
 
-        self.stream_levels.pop(stream_id, None)
-        self.streams.pop(stream_id, None)
-
-    def _prune_finished_streams_locked(self):
-        for sid, s in list(self.streams.items()):
-            try:
-                gone = s.finished or not s.stream.active
-            except Exception:
-                gone = True
-            if gone:
-                self._cleanup_stream_locked(sid, s)
+    def _prune_finished_streams(self):
+        """Detaches streams that ended and queues their teardown (non-blocking)."""
+        with self.lock:
+            done = []
+            for sid, s in list(self.streams.items()):
+                try:
+                    gone = s.finished or not s.stream.active
+                except Exception:
+                    gone = True
+                if gone:
+                    done.append((sid, self._detach_locked(sid, s)))
+        for sid, s in done:
+            self._closer.submit(self._teardown, sid, s)
 
     # ── Waveform ───────────────────────────────────────────────────────────
 

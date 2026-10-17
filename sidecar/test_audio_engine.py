@@ -5,6 +5,7 @@ import os
 import struct
 import sys
 import tempfile
+import threading
 import time
 import wave
 
@@ -80,6 +81,36 @@ def main():
         # 6. Waveform comes from the same decoded data.
         peaks, duration = engine.get_waveform(wav, 10)
         assert len(peaks) == 10 and abs(duration - 1.0) < 1e-6 and max(peaks) == 1.0
+
+        # 6b. A stream being torn down goes silent but never ends itself (that
+        #     races with the abort() from the engine thread).
+        s_closed = _Stream("x.wav", first, None, 1.0, True, lambda sid: None, None, "none", 20000)
+        s_closed.closed = True
+        out = np.ones((1024, 2), dtype="float32")
+        engine._fill(s_closed, 0, out, 1024, None)  # must not raise CallbackStop
+        assert not out.any(), "a closed stream must output silence"
+
+        # 7. A slow native stop (CoreAudio waiting on a device) must never freeze
+        #    the event loop: get_levels() runs there 20x/second and used to wait
+        #    for the lock that stop() held during the native call.
+        class SlowStream:
+            active = True
+            def abort(self): time.sleep(1.5)
+            def close(self): pass
+
+        slow = _Stream("slow.wav", first, None, 1.0, True, lambda sid: None, None, "none", 20000)
+        slow.stream = SlowStream()
+        engine.streams[99] = slow
+        stopper = threading.Thread(target=engine.stop, args=(99,))
+        stopper.start()
+        time.sleep(0.2)  # stop() is now inside the slow native call
+        t0 = time.perf_counter()
+        engine.get_levels()
+        engine.set_volume(5, 0.5)
+        lag = time.perf_counter() - t0
+        stopper.join()
+        assert lag < 0.2, f"event-loop calls blocked for {lag:.2f}s behind a slow stop"
+        assert 99 not in engine.streams
     print("PASS")
 
 
