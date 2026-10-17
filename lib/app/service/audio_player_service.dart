@@ -3,6 +3,7 @@ import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 
 import 'package:get/get.dart';
+import 'package:padvibe/app/core/logging/app_log.dart';
 import 'package:padvibe/app/service/audio_engine_service.dart';
 
 // --- Types Compatibility ---
@@ -160,6 +161,7 @@ class AudioPlayerService extends GetxService {
     final deviceId =
         event['device_id'] as int?; // Needs sidecar update to send this
 
+    _startingPaths.remove(path);
     final isBackground = _pathIsBackground[path] ?? false;
 
     final stream = ActiveStream(
@@ -327,6 +329,9 @@ class AudioPlayerService extends GetxService {
   // Track which paths are currently playing as background
   final Map<String, bool> _pathIsBackground = {};
 
+  // Paths whose play request is sent but not yet confirmed by audio_started.
+  final Set<String> _startingPaths = {};
+
   Future<void> playSound(
     String path, {
     bool loop = false,
@@ -338,6 +343,18 @@ class AudioPlayerService extends GetxService {
     double filterFrequency = 20000.0,
   }) async {
     await ensureInitialized();
+
+    // A second click before the sidecar confirms the first (audio_started)
+    // looked like "not playing" and started a duplicate stream: double and
+    // triple clicks stacked copies of the same sound and raced the audio
+    // device. Ignore requests for a path that is still starting.
+    if (!_startingPaths.add(path)) {
+      AppLog.log('audio', 'Ignored duplicate play request (still starting): $path');
+      return;
+    }
+    // Never stay "starting" forever, e.g. if the sidecar drops the request.
+    Timer(const Duration(seconds: 2), () => _startingPaths.remove(path));
+
     _pathIsBackground[path] = isBackground;
     _pausedPaths.remove(path);
 

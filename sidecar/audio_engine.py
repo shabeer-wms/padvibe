@@ -402,6 +402,16 @@ class AudioEngine:
             log.error("Failed to start stream on device %s (%s): %s", device_id, wanted_name, e)
             self._log_device_snapshot("at failure")
 
+        # "Audio Hardware Not Running" is often transient: the device was shutting
+        # down because its last stream had just stopped. Give it a moment first.
+        time.sleep(0.2)
+        try:
+            stream = open_(device_id, channels)
+            log.warning("Device %s accepted the stream on a plain retry", device_id)
+            return stream
+        except Exception as e:
+            log.error("Retry on device %s also failed: %s", device_id, e)
+
         with self.lock:
             idle = not self.streams
         if idle:

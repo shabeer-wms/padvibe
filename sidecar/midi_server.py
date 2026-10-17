@@ -347,8 +347,9 @@ async def main():
 
     midi_engine = MidiEngine(broadcast)
     await midi_engine.start_listener()
+    loop = asyncio.get_running_loop()  # captured here: the callback runs on worker threads
     audio_engine.on_devices_changed = lambda: asyncio.run_coroutine_threadsafe(
-        _announce_audio_devices(), asyncio.get_running_loop()
+        _announce_audio_devices(), loop
     )
 
     asyncio.create_task(loop_ticker())
