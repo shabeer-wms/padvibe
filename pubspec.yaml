@@ -49,6 +49,10 @@ dependencies:
   flutter_single_instance: ^1.7.0
   sqflite_common_ffi: ^2.4.0+2
   sqflite: ^2.4.2
+  # Needed directly: flutter_single_instance calls windowManager.focus() when a
+  # second copy is launched, and that crashes the running app (uncatchable
+  # SIGILL) unless windowManager.ensureInitialized() ran first.
+  window_manager: ^0.5.0
 
 dev_dependencies:
   flutter_test:

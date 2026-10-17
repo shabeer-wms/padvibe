@@ -14,6 +14,17 @@ rm -rf "$DEST"
 mkdir -p "$DEST"
 cp -R "$SRC/." "$DEST/"
 
-codesign --force --deep --sign - "$APP"
+# Re-sign after adding files. The entitlements must be passed again: signing
+# without them silently drops them, and the file picker then fails with
+# ENTITLEMENT_NOT_FOUND. Nested frameworks keep the signatures Flutter gave them.
+# codesign's parser rejects "<false />" in the project's plist; plutil rewrites it canonically.
+ENTITLEMENTS="$(mktemp -t padvibe-entitlements).plist"
+plutil -convert xml1 -o "$ENTITLEMENTS" macos/Runner/Release.entitlements
+codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP"
+rm -f "$ENTITLEMENTS"
 codesign --verify --deep --strict "$APP"
+
+# Fail the build if the entitlement the file picker needs is missing.
+codesign -d --entitlements - "$APP" 2>&1 | grep -q "files.user-selected" \
+  || { echo "ERROR: $APP lost its file-access entitlement after signing" >&2; exit 1; }
 echo "Sidecar bundled into $APP ($(lipo -archs "$DEST/midi_server"))"

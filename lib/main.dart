@@ -24,6 +24,13 @@ Future<void> _run() async {
   await AppLog.init();
   AppLog.installHandlers();
 
+  // Required before anyone calls windowManager.focus(): launching a second copy
+  // of the app makes flutter_single_instance do exactly that in this one, and
+  // without this the native plugin traps (SIGILL) and the app dies.
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    await windowManager.ensureInitialized();
+  }
+
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
