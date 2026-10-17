@@ -1,0 +1,3 @@
+[submodule "padvibe-web"]
+	path = padvibe-web
+	url = https://github.com/shabeer-wms/padvibe-web.git

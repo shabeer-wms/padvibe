@@ -475,7 +475,7 @@ class _IntegrationsSectionState extends State<_IntegrationsSection> {
               PanelValue(label: 'Local IP', value: ip),
               PanelValue(
                 label: 'Endpoint',
-                value: 'http://$ip:9696/api/v1/state',
+                value: 'http://$ip:9696/state',
                 copyable: true,
               ),
             ],
