@@ -92,6 +92,14 @@ def install_signal_logging(on_exit):
                 pass
 
 
+def dump_stacks(reason):
+    """Writes every thread's stack to the crash log: shows where a hang is stuck."""
+    log.error("Dumping all thread stacks: %s", reason)
+    if _crash_file:
+        _crash_file.write(f"\n--- {reason} {time.ctime()} ---\n")
+    faulthandler.dump_traceback(file=_crash_file or sys.stderr, all_threads=True)
+
+
 def tick():
     """Called from the asyncio loop every second to show it is alive."""
     global _last_tick

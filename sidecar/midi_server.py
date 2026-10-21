@@ -4,6 +4,7 @@ import json
 import websockets
 import sys
 import threading
+import time
 import os
 import sidecar_log
 from sidecar_log import log
@@ -15,6 +16,7 @@ from midi_engine import MidiEngine
 
 # Global Engines
 audio_engine = AudioEngine()
+_background = set()  # keeps fire-and-forget tasks alive until they finish
 midi_engine = None # Initialized in main
 
 # Clients
@@ -150,6 +152,49 @@ async def loop_ticker():
         sidecar_log.tick()
         await asyncio.sleep(1)
 
+async def call_engine(fn, *args, timeout=15, **kwargs):
+    """Runs a blocking engine call off the loop. If it is stuck for longer than
+    `timeout`, give up on it so one bad native call cannot freeze every command
+    queued behind it (the worker thread is abandoned, not killed)."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(fn, *args, **kwargs), timeout)
+    except asyncio.TimeoutError:
+        name = getattr(fn, "__name__", str(fn))
+        log.error("%s did not finish within %ss; abandoning it", name, timeout)
+        sidecar_log.dump_stacks(f"{name} stuck for {timeout}s")
+        raise RuntimeError(f"{name} timed out after {timeout}s")
+
+
+def on_audio_wedged(what):
+    """A native audio call is stuck for good; the only cure is a fresh process.
+    The app restarts the sidecar when it exits."""
+    sidecar_log.dump_stacks(f"audio wedged while trying to {what}")
+    def die():
+        time.sleep(1)  # let the error reach the app first
+        log.critical("Exiting so the app can restart the audio engine")
+        cleanup()
+        os._exit(75)
+    threading.Thread(target=die, name="wedge-exit", daemon=True).start()
+
+
+async def send_waveform(websocket, file_path, points):
+    """Runs beside the command loop: a big file must not delay the plays queued behind it."""
+    try:
+        waveform, duration = await call_engine(audio_engine.get_waveform, file_path, points, timeout=180)
+        await send_json(websocket, {
+            "type": "waveform_data",
+            "file_path": file_path,
+            "data": waveform,
+            "duration": duration
+        })
+    except Exception as e:
+        log.exception("Waveform failed for %s", file_path)
+        try:
+            await send_json(websocket, {"type": "error", "message": f"Waveform Error: {e}"})
+        except Exception:
+            pass
+
+
 async def handle_websocket(websocket):
     """Handles incoming WebSocket connections and messages."""
     peer = getattr(websocket, "remote_address", "?")
@@ -219,7 +264,7 @@ async def handle_websocket(websocket):
                                 loop_ref
                             )
 
-                        stream_id, duration = await asyncio.to_thread(
+                        stream_id, duration = await call_engine(
                             audio_engine.play,
                             file_path, device_id, volume, loop,
                             on_finished=on_finished,
@@ -244,14 +289,14 @@ async def handle_websocket(websocket):
 
                 elif command == "stop_audio":
                     stream_id = data.get("stream_id")
-                    await asyncio.to_thread(audio_engine.stop, stream_id)
+                    await call_engine(audio_engine.stop, stream_id)
                     await send_json(websocket, {
                         "type": "audio_stopped",
                         "stream_id": stream_id
                     })
 
                 elif command == "stop_all_audio":
-                    await asyncio.to_thread(audio_engine.stop_all)
+                    await call_engine(audio_engine.stop_all)
                     await send_json(websocket, {"type": "all_audio_stopped"})
 
                 elif command == "set_master_volume":
@@ -287,25 +332,20 @@ async def handle_websocket(websocket):
                 elif command == "seek_audio":
                     stream_id = data.get("stream_id")
                     pos = data.get("position") # seconds
-                    await asyncio.to_thread(audio_engine.seek, stream_id, pos)
+                    await call_engine(audio_engine.seek, stream_id, pos)
 
                 elif command == "unload_audio":
                     # A pad was cleared/replaced/deleted: stop its streams and free its decoded audio.
                     file_path = data.get("file_path")
-                    await asyncio.to_thread(audio_engine.unload, file_path)
+                    await call_engine(audio_engine.unload, file_path)
                     await send_json(websocket, {"type": "audio_unloaded", "file_path": file_path})
 
                 elif command == "get_waveform":
                     file_path = data.get("file_path")
-                    # Run in thread to avoid blocking loop
                     points = data.get("points", 100)
-                    waveform, duration = await asyncio.to_thread(audio_engine.get_waveform, file_path, points)
-                    await send_json(websocket, {
-                        "type": "waveform_data",
-                        "file_path": file_path,
-                        "data": waveform,
-                        "duration": duration
-                    })
+                    task = asyncio.create_task(send_waveform(websocket, file_path, points))
+                    _background.add(task)
+                    task.add_done_callback(_background.discard)
 
                 elif command == "shutdown":
                     log.warning("Shutdown command received from %s", peer)
@@ -348,6 +388,7 @@ async def main():
     midi_engine = MidiEngine(broadcast)
     await midi_engine.start_listener()
     loop = asyncio.get_running_loop()  # captured here: the callback runs on worker threads
+    audio_engine.on_wedged = on_audio_wedged
     audio_engine.on_devices_changed = lambda: asyncio.run_coroutine_threadsafe(
         _announce_audio_devices(), loop
     )

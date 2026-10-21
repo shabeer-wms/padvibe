@@ -935,12 +935,10 @@ class HomeView extends GetView<HomeController> {
 
                         return ClipRRect(
                           borderRadius: BorderRadius.circular(14),
-                          child: CustomPaint(
-                            painter: WaveformPainter(
-                              data: currentWave,
-                              color: Colors.white.withValues(alpha: 0.2),
-                              progress: 0.0,
-                            ),
+                          child: _PadWaveform(
+                            path: pad.path!,
+                            controller: controller,
+                            data: currentWave,
                           ),
                         );
                       },
@@ -1684,6 +1682,63 @@ class _LEDMeterBar extends StatelessWidget {
   }
 }
 
+/// The pad's waveform with a white playhead: the part already played is
+/// brighter and a white line marks the current position while it plays.
+class _PadWaveform extends StatefulWidget {
+  final String path;
+  final HomeController controller;
+  final List<double> data;
+
+  const _PadWaveform({
+    required this.path,
+    required this.controller,
+    required this.data,
+  });
+
+  @override
+  State<_PadWaveform> createState() => _PadWaveformState();
+}
+
+class _PadWaveformState extends State<_PadWaveform> {
+  Timer? _timer;
+  double _progress = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 33), (_) => _tick());
+  }
+
+  void _tick() {
+    if (!mounted) return;
+    final svc = widget.controller.audioService;
+    final active = svc.isPlaying(widget.path) || svc.isPaused(widget.path);
+    final len = svc.getLength(widget.path);
+    final next = active && len.inMilliseconds > 0
+        ? (svc.getPosition(widget.path).inMilliseconds / len.inMilliseconds)
+              .clamp(0.0, 1.0)
+        : 0.0;
+    if (next != _progress) setState(() => _progress = next);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: WaveformPainter(
+        data: widget.data,
+        color: Colors.white.withValues(alpha: 0.2),
+        progress: _progress,
+      ),
+    );
+  }
+}
+
 class _PadProgressWidget extends StatefulWidget {
   final String path;
   final HomeController controller;
@@ -1862,7 +1917,7 @@ class WaveformPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
 
     final playedPaint = Paint()
-      ..color = color.withValues(alpha: 0.9)
+      ..color = color.withValues(alpha: 0.45)
       ..style = PaintingStyle.fill;
 
     // Draw background/unplayed waveform
@@ -1874,6 +1929,20 @@ class WaveformPainter extends CustomPainter {
       canvas.clipRect(Rect.fromLTWH(0, 0, size.width * progress, size.height));
       _drawWave(canvas, size, playedPaint, data);
       canvas.restore();
+
+      // White playhead: a line across the whole tile with a small cap on top.
+      final x = (size.width * progress).clamp(1.0, size.width - 1.0);
+      final line = Paint()
+        ..color = Colors.white
+        ..strokeWidth = 2.0;
+      canvas.drawShadow(
+        Path()..addRect(Rect.fromLTWH(x - 1, 0, 2, size.height)),
+        Colors.black,
+        2.0,
+        false,
+      );
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), line);
+      canvas.drawCircle(Offset(x, 4), 4, line);
     }
   }
 

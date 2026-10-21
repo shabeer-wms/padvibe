@@ -1,4 +1,5 @@
 import concurrent.futures
+import contextlib
 import logging
 import os
 import threading
@@ -10,6 +11,10 @@ import sounddevice as sd
 import soundfile as sf
 
 log = logging.getLogger("sidecar.audio")
+
+# A native PortAudio call (open/abort/close) normally takes milliseconds. Waiting
+# longer than this for the lock that serialises them means one is stuck for good.
+PA_LOCK_TIMEOUT = 5.0
 
 DecodedAudio = namedtuple("DecodedAudio", "data samplerate channels frames nbytes mtime size")
 
@@ -141,11 +146,28 @@ class AudioEngine:
         self._closer = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="audio-closer")
         # Set by the server; called (from any thread) when device indices changed.
         self.on_devices_changed = None
+        # Set by the server; called when a native audio call is stuck for good, so
+        # the process can restart instead of leaving every pad silent.
+        self.on_wedged = None
+
+    @contextlib.contextmanager
+    def _pa(self, what):
+        """Holds _pa_lock, but gives up (and reports a wedge) instead of waiting forever."""
+        if not self._pa_lock.acquire(timeout=PA_LOCK_TIMEOUT):
+            log.critical("Audio engine wedged: a native audio call has held the lock for over %.0fs (waiting to %s)",
+                         PA_LOCK_TIMEOUT, what)
+            if self.on_wedged:
+                self.on_wedged(what)
+            raise RuntimeError("The audio device is not responding. PadVibe is restarting its audio engine.")
+        try:
+            yield
+        finally:
+            self._pa_lock.release()
 
     # ── Devices ────────────────────────────────────────────────────────────
 
     def _ensure_initialized(self):
-        with self._pa_lock:
+        with self._pa("initialise PortAudio"):
             self._ensure_initialized_locked()
 
     def _ensure_initialized_locked(self):
@@ -162,7 +184,7 @@ class AudioEngine:
         """Returns a list of available output devices."""
         self._ensure_initialized()
         try:
-            with self._pa_lock:
+            with self._pa("list devices"):
                 devices = sd.query_devices()
                 hostapis = sd.query_hostapis()
             output_devices = []
@@ -240,7 +262,7 @@ class AudioEngine:
                 stream_id = self.next_stream_id
                 self.next_stream_id += 1
 
-            with self._pa_lock:
+            with self._pa("open a stream"):
                 s.stream = self._start_stream(device_id, s.samplerate, max_ch, self._make_callback(s, stream_id))
             with self.lock:
                 self.streams[stream_id] = s
@@ -257,16 +279,13 @@ class AudioEngine:
         def callback(outdata, frames, time_info, status):
             try:
                 self._fill(s, stream_id, outdata, frames, status)
-            except sd.CallbackStop:
-                raise
             except Exception as e:
                 # A decode/seek error mid-stream (e.g. a corrupt file) must end
                 # this stream cleanly instead of aborting PortAudio's thread.
-                log.error("Callback error on stream %s, stopping it: %r", stream_id, e, exc_info=True)
+                log.error("Callback error on stream %s, ending it: %r", stream_id, e, exc_info=True)
                 outdata.fill(0)
                 s.finished = True
                 s.notify_finished(stream_id)
-                raise sd.CallbackStop
         return callback
 
     def _next_block(self, s, frames):
@@ -315,7 +334,7 @@ class AudioEngine:
             return
         if s.finished:
             s.notify_finished(stream_id)
-            raise sd.CallbackStop
+            return  # silence until the engine tears the stream down
 
         block = self._next_block(s, frames)
         n = len(block)
@@ -346,8 +365,10 @@ class AudioEngine:
             self.stream_levels[stream_id] = (0.0, 0.0, 0.0, 0.0)
 
         if s.finished:
+            # Never end the stream from inside the callback (CallbackStop): that
+            # races with abort() from the engine and can deadlock PortAudio for
+            # good. The engine notices `finished` within 50ms and tears it down.
             s.notify_finished(stream_id)
-            raise sd.CallbackStop
 
     @staticmethod
     def _route(block, outdata, targets):
@@ -465,14 +486,14 @@ class AudioEngine:
             log.debug("Stop requested for unknown stream %s", stream_id)
             return
         log.info("Stopping stream %s", stream_id)
-        self._teardown(stream_id, s)
+        self._closer.submit(self._teardown, stream_id, s)
 
     def stop_all(self):
         with self.lock:
             detached = [(sid, self._detach_locked(sid, s)) for sid, s in list(self.streams.items())]
         log.info("Stopping all streams: %s", [sid for sid, _ in detached])
         for sid, s in detached:
-            self._teardown(sid, s)
+            self._closer.submit(self._teardown, sid, s)
 
     def unload(self, file_path):
         """Forgets a file (its pad was cleared or removed): stops anything still
@@ -484,7 +505,7 @@ class AudioEngine:
             ]
         for sid, s in detached:
             log.info("Stopping stream %s: its file was unloaded", sid)
-            self._teardown(sid, s)
+            self._closer.submit(self._teardown, sid, s)
         freed = self.cache.evict(file_path)
         log.info("Unloaded %s (was cached: %s; cache now %d files, %.1fMB)",
                  os.path.basename(file_path), freed, len(self.cache), self.cache.total_bytes / 1e6)
@@ -586,7 +607,7 @@ class AudioEngine:
         if s.file is not None:
             steps.append(("file close", s.file.close))
         t0 = time.monotonic()
-        with self._pa_lock:
+        with self._pa("stop a stream"):
             for step, fn in steps:
                 try:
                     fn()

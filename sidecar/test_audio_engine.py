@@ -30,14 +30,10 @@ def run_stream(engine, audio, loop, blocks, volume=1.0):
     out_blocks = []
     for _ in range(blocks):
         out = np.zeros((1024, 2), dtype="float32")
-        try:
-            engine._fill(s, 0, out, 1024, None)
-        except Exception as e:  # sd.CallbackStop ends the stream
-            if type(e).__name__ != "CallbackStop":
-                raise
-            out_blocks.append(out)
-            break
+        engine._fill(s, 0, out, 1024, None)  # must never raise (CallbackStop races with abort())
         out_blocks.append(out)
+        if s.finished:
+            break
     return s, out_blocks, finished
 
 
@@ -111,6 +107,28 @@ def main():
         stopper.join()
         assert lag < 0.2, f"event-loop calls blocked for {lag:.2f}s behind a slow stop"
         assert 99 not in engine.streams
+
+        # 8. A native call stuck forever holds the PortAudio lock: the next
+        #    caller must give up, report the wedge and raise, not hang.
+        import audio_engine as ae
+        ae.PA_LOCK_TIMEOUT = 0.3
+        wedged = []
+        engine.on_wedged = wedged.append
+        hold, release = threading.Event(), threading.Event()
+        def stuck():
+            with engine._pa_lock:
+                hold.set()
+                release.wait(5)
+        threading.Thread(target=stuck, daemon=True).start()
+        hold.wait()
+        t0 = time.perf_counter()
+        try:
+            with engine._pa("open a stream"):
+                raise AssertionError("lock should not have been acquired")
+        except RuntimeError:
+            pass
+        release.set()
+        assert wedged == ["open a stream"] and time.perf_counter() - t0 < 2
     print("PASS")
 
 
